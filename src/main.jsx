@@ -1,0 +1,1663 @@
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrowserRouter, NavLink, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs';
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import './App.css';
+import fallbackItems from './data/standard_items.json';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+
+const updateSW = () => {};
+
+const STORAGE_KEYS = {
+  favorites: 'facility-standard:favorites',
+  recent: 'facility-standard:recent',
+  checklist: 'facility-standard:checklist-v2',
+  settings: 'facility-standard:settings',
+  installDismissed: 'facility-standard:install-dismissed',
+  geminiUserKey: 'facility-standard:gemini-user-key',
+  adminToken: 'facility-standard:admin-token',
+  userId: 'facility-standard:user-id',
+  checklistSite: 'facility-standard:checklist-site',
+};
+
+const LAW_URL = 'https://www.law.go.kr/ais/main.do';
+
+const QUICK_TERMS = ['배관 지지', '보온 두께', '수압시험', '덕트 행거', '방화댐퍼', '배관 구배'];
+
+function readUserGeminiKey() {
+  try { return (localStorage.getItem(STORAGE_KEYS.geminiUserKey) || '').trim(); } catch { return ''; }
+}
+function readAdminToken() {
+  try { return (localStorage.getItem(STORAGE_KEYS.adminToken) || '').trim(); } catch { return ''; }
+}
+function readUserId() {
+  try { return (localStorage.getItem(STORAGE_KEYS.userId) || '').trim(); } catch { return ''; }
+}
+function readStorage(key, fallback) {
+  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
+}
+function writeStorage(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+}
+
+function useStoredState(key, fallback) {
+  const [value, setValue] = useState(() => readStorage(key, fallback));
+  const update = useCallback((next) => {
+    setValue((current) => {
+      const resolved = typeof next === 'function' ? next(current) : next;
+      writeStorage(key, resolved);
+      return resolved;
+    });
+  }, [key]);
+  return [value, update];
+}
+
+function useNetworkStatus() {
+  const [online, setOnline] = useState(() => navigator.onLine);
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+  }, []);
+  return online;
+}
+
+function useServiceWorkerNotice() {
+  const [updateReady, setUpdateReady] = useState(false);
+  const [offlineReady, setOfflineReady] = useState(false);
+  useEffect(() => {
+    const onUpdate = () => setUpdateReady(true);
+    const onOffline = () => setOfflineReady(true);
+    window.addEventListener('facility-sw-update', onUpdate);
+    window.addEventListener('facility-offline-ready', onOffline);
+    return () => {
+      window.removeEventListener('facility-sw-update', onUpdate);
+      window.removeEventListener('facility-offline-ready', onOffline);
+    };
+  }, []);
+  return { updateReady, offlineReady, setUpdateReady, setOfflineReady };
+}
+
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+
+function apiUrl(path) {
+  if (!path) return '';
+  if (/^https?:\/\//i.test(path)) return path;
+  return `${API_BASE_URL}${path}`;
+}
+
+function pdfViewerLink(url, page, title) {
+  if (!url) return '';
+  const params = new URLSearchParams({ url });
+  if (page) params.set('page', String(page));
+  if (title) params.set('title', title);
+  return `/pdf-viewer?${params.toString()}`;
+}
+
+async function fetchJson(path, options = {}) {
+  const userKey = readUserGeminiKey();
+  if (userKey && (path === '/api/ask' || path.startsWith('/api/ask?'))) {
+    options = { ...options, headers: { ...(options.headers || {}), 'X-User-Gemini-Key': userKey } };
+  }
+  const adminToken = readAdminToken();
+  const adminPath = path.startsWith('/api/migration') || path.startsWith('/api/rag/') || path.startsWith('/api/sites') || path.startsWith('/api/drawing') || path.startsWith('/api/site-issues');
+  if (adminToken && adminPath) {
+    options = { ...options, headers: { ...(options.headers || {}), 'X-Admin-Token': adminToken } };
+  }
+  if (path.startsWith('/api/checklists')) {
+    const userId = readUserId();
+    if (userId) options = { ...options, headers: { ...(options.headers || {}), 'X-User-Id': userId } };
+  }
+  const response = await fetch(apiUrl(path), options);
+  if (!response.ok) throw new Error(`API ${response.status}`);
+  return response.json();
+}
+
+function useStandardItems() {
+  const [items, setItems] = useState(fallbackItems);
+  const [apiStatus, setApiStatus] = useState({ mode: 'fallback', message: '로컬 JSON 사용 중' });
+  const refreshItems = async () => {
+    try {
+      const data = await fetchJson('/api/standards');
+      setItems(Array.isArray(data.items) ? data.items : fallbackItems);
+      setApiStatus({ mode: 'online', message: `백엔드 연결됨 · ${data.count ?? data.items?.length ?? 0}개 항목` });
+    } catch {
+      setItems(fallbackItems);
+      setApiStatus({ mode: 'fallback', message: 'FastAPI 미연결 · 로컬 JSON 사용 중' });
+    }
+  };
+  useEffect(() => { refreshItems(); }, []);
+  return { items, apiStatus, refreshItems };
+}
+
+function toggleFavorite(id, appState) {
+  appState.setFavorites((current) =>
+    current.includes(id) ? current.filter((fid) => fid !== id) : [...current, id]
+  );
+}
+
+function App() {
+  const [favorites, setFavorites] = useStoredState(STORAGE_KEYS.favorites, []);
+  const [recent, setRecent] = useStoredState(STORAGE_KEYS.recent, []);
+  const [checked, setChecked] = useStoredState(STORAGE_KEYS.checklist, {});
+  const [settings, setSettings] = useStoredState(STORAGE_KEYS.settings, {
+    compactMode: false, showIds: false, largeTouch: false,
+  });
+  const networkOnline = useNetworkStatus();
+  const swNotice = useServiceWorkerNotice();
+  const { items, apiStatus, refreshItems } = useStandardItems();
+
+  const appState = {
+    favorites, setFavorites, recent, setRecent,
+    checked, setChecked, settings, setSettings,
+    items, apiStatus, refreshItems, networkOnline, swNotice,
+  };
+
+  return (
+    <BrowserRouter>
+      <div className={['app', settings.compactMode ? 'compact' : '', settings.largeTouch ? 'large-touch' : ''].filter(Boolean).join(' ')}>
+        <SwNotice appState={appState} />
+        <main className="page-shell">
+          <Routes>
+            <Route path="/" element={<HomePage appState={appState} />} />
+            <Route path="/search" element={<SearchPage appState={appState} />} />
+            <Route path="/item/:id" element={<DetailPage appState={appState} />} />
+            <Route path="/sites" element={<SiteListPage />} />
+            <Route path="/sites/new" element={<SiteFormPage />} />
+            <Route path="/sites/:siteId" element={<SiteDetailPage />} />
+            <Route path="/checklist" element={<ChecklistPage appState={appState} />} />
+            <Route path="/checklist/:trade" element={<ChecklistDetailPage appState={appState} />} />
+            <Route path="/saved" element={<SavedPage appState={appState} />} />
+            <Route path="/settings" element={<SettingsPage appState={appState} />} />
+            <Route path="/admin" element={<AdminPage appState={appState} />} />
+            <Route path="/pdf-viewer" element={<PdfViewerPage />} />
+          </Routes>
+        </main>
+        <BottomNav />
+      </div>
+    </BrowserRouter>
+  );
+}
+
+// ── Bottom Navigation ─────────────────────────────────────────────────────────
+
+function BottomNav() {
+  const links = [
+    ['/', '홈', '⌂'],
+    ['/search', '검색', '⌕'],
+    ['/sites', '현장이슈', '📋'],
+    ['/saved', '즐겨찾기', '★'],
+    ['/settings', '설정', '⚙'],
+  ];
+  return (
+    <nav className="bottom-nav">
+      {links.map(([to, label, icon]) => (
+        <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => isActive ? 'active' : ''}>
+          <span>{icon}</span>
+          <small>{label}</small>
+        </NavLink>
+      ))}
+    </nav>
+  );
+}
+
+// ── SW Notice ─────────────────────────────────────────────────────────────────
+
+function SwNotice({ appState }) {
+  const { swNotice } = appState;
+  if (swNotice.updateReady) {
+    return (
+      <div className="sw-notice">
+        <span>새 버전이 준비되었습니다.</span>
+        <button className="mini-button" onClick={() => updateSW(true)}>업데이트</button>
+        <button className="ghost-button" onClick={() => swNotice.setUpdateReady(false)}>닫기</button>
+      </div>
+    );
+  }
+  if (swNotice.offlineReady) {
+    return (
+      <div className="sw-notice soft">
+        <span>오프라인 사용 준비 완료</span>
+        <button className="ghost-button" onClick={() => swNotice.setOfflineReady(false)}>확인</button>
+      </div>
+    );
+  }
+  return null;
+}
+
+// ── Home Page ─────────────────────────────────────────────────────────────────
+
+function HomePage({ appState }) {
+  const navigate = useNavigate();
+  return (
+    <section className="stack home-page">
+      <div className="home-header">
+        <p className="eyebrow">기계설비 시공표준 검색</p>
+        <h1>설비 시공표준 검색</h1>
+      </div>
+
+      <form className="home-search-form" onSubmit={(e) => {
+        e.preventDefault();
+        const q = e.target.elements.q.value.trim();
+        if (q.length >= 2) navigate(`/search?q=${encodeURIComponent(q)}`);
+      }}>
+        <div className="home-search-row">
+          <input name="q" placeholder="배관 지지 기준 검색" autoComplete="off" />
+          <button type="submit">검색</button>
+        </div>
+      </form>
+
+      <div className="home-card-grid">
+        <NavLink className="home-card primary-card" to="/search">
+          <span className="home-card-icon">⌕</span>
+          <strong>회사 표준지침 검색</strong>
+          <span>AI 기반 근거 검색</span>
+        </NavLink>
+        <NavLink className="home-card" to="/sites">
+          <span className="home-card-icon">📋</span>
+          <strong>현장이슈 공유</strong>
+          <span>현장별 도면검토·이슈</span>
+        </NavLink>
+        <NavLink className="home-card" to="/checklist">
+          <span className="home-card-icon">☑</span>
+          <strong>체크리스트</strong>
+          <span>공종별 현장 점검</span>
+        </NavLink>
+        <NavLink className="home-card" to="/saved">
+          <span className="home-card-icon">★</span>
+          <strong>즐겨찾기</strong>
+          <span>최근 본 항목</span>
+        </NavLink>
+      </div>
+
+      <a className="law-link-card" href={LAW_URL} target="_blank" rel="noreferrer">
+        <div>
+          <strong>법제처 AI 법령검색 바로가기</strong>
+          <span>법령은 공식 사이트에서 확인</span>
+        </div>
+        <span className="ext-icon">↗</span>
+      </a>
+
+      <div className="home-section-title">자주 찾는 항목</div>
+      <div className="quick-chips">
+        {QUICK_TERMS.map((term) => (
+          <button key={term} className="chip" onClick={() => navigate(`/search?q=${encodeURIComponent(term)}`)}>
+            {term}
+          </button>
+        ))}
+      </div>
+
+      {!appState.networkOnline && (
+        <div className="offline-notice">오프라인 상태 · 로컬 기준과 즐겨찾기를 사용할 수 있습니다.</div>
+      )}
+    </section>
+  );
+}
+
+// ── Search Page ───────────────────────────────────────────────────────────────
+
+function filterLocalItems(items, query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  return items.filter((item) => {
+    const hay = [item.id, item.category, item.section, item.title, item.summary, item.body, ...(item.keywords || [])].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+}
+
+function SearchPage({ appState }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialQ = (searchParams.get('q') || '').trim();
+  const [query, setQuery] = useState(initialQ);
+  const [submitted, setSubmitted] = useState(initialQ);
+  const [kcscState, setKcscState] = useState({ status: 'idle', items: [], error: '' });
+  const [aiState, setAiState] = useState({ status: 'idle', result: null, error: '' });
+
+  const companyResults = useMemo(() => filterLocalItems(appState.items, submitted).slice(0, 8), [appState.items, submitted]);
+
+  const runSearch = useCallback(async (rawQuery) => {
+    const q = (rawQuery ?? query).trim();
+    if (q.length < 2) return;
+    setSubmitted(q);
+    setQuery(q);
+    if (searchParams.get('q') !== q) setSearchParams({ q }, { replace: true });
+
+    setKcscState({ status: 'loading', items: [], error: '' });
+    setAiState({ status: 'loading', result: null, error: '' });
+
+    fetchJson('/api/external/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: q, sources: ['kcsc'], limit: 5 }),
+    }).then((data) => {
+      const kcsc = (data.items || []).filter((it) => (it.source || '').toLowerCase() === 'kcsc');
+      setKcscState({ status: 'ready', items: kcsc, error: '' });
+    }).catch(() => setKcscState({ status: 'error', items: [], error: 'KCSC 검색에 연결할 수 없습니다.' }));
+
+    fetchJson('/api/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q, top_k: 5 }),
+    }).then((data) => setAiState({ status: 'ready', result: data, error: '' }))
+      .catch(() => setAiState({ status: 'error', result: null, error: 'AI 답변을 가져올 수 없습니다.' }));
+  }, [query, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    const urlQ = (searchParams.get('q') || '').trim();
+    if (urlQ.length >= 2 && urlQ !== submitted) runSearch(urlQ);
+  }, [searchParams]);
+
+  const hasSubmitted = submitted.length >= 2;
+
+  return (
+    <section className="stack">
+      <div className="page-header">
+        <NavLink className="back-link" to="/">← 홈</NavLink>
+        <h2>회사 표준지침 검색</h2>
+      </div>
+
+      <form className="search-form" onSubmit={(e) => { e.preventDefault(); runSearch(); }}>
+        <div className="search-row">
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="예: 배관 지지 기준, 보온 두께" autoFocus />
+          <button type="submit" disabled={query.trim().length < 2}>검색</button>
+        </div>
+        <div className="quick-chips">
+          {QUICK_TERMS.map((term) => (
+            <button type="button" key={term} className="chip" onClick={() => runSearch(term)}>{term}</button>
+          ))}
+        </div>
+      </form>
+
+      {!hasSubmitted ? (
+        <div className="empty-hint">검색어를 입력하면 회사 표준지침을 먼저 보여드립니다.</div>
+      ) : (
+        <>
+          {/* 1순위: AI 답변 */}
+          <AiAnswerPanel state={aiState} appState={appState} />
+
+          {/* 2순위: 회사 표준지침 */}
+          <SearchSection title="회사 표준지침" tag="내부 기준" priority={1}>
+            {companyResults.length === 0 ? (
+              <div className="section-empty">
+                회사 표준지침에서 직접 관련 기준을 찾지 못했습니다.<br />
+                아래 KCSC 참고 기준을 확인할 수 있습니다.<br />
+                <small>현장 적용 전 담당자 검토가 필요합니다.</small>
+              </div>
+            ) : companyResults.map((item) => (
+              <CompanyResultCard key={item.id} item={item} appState={appState} />
+            ))}
+          </SearchSection>
+
+          {/* 3순위: KCSC 참고 기준 */}
+          <SearchSection title="KCSC 참고 기준" tag="국가건설기준센터" priority={2} note="KCSC는 참고 기준입니다. 현장 적용은 회사 표준지침과 계약도서를 우선 확인하세요.">
+            {kcscState.status === 'loading' ? (
+              <div className="loading-row"><span className="spinner" />검색 중...</div>
+            ) : kcscState.status === 'error' ? (
+              <div className="section-empty">{kcscState.error}</div>
+            ) : kcscState.items.length === 0 ? (
+              <div className="section-empty">관련 KCSC 참고 기준을 찾지 못했습니다.</div>
+            ) : kcscState.items.map((item) => (
+              <KcscCard key={item.id} item={item} />
+            ))}
+          </SearchSection>
+
+          {/* 법령 링크 */}
+          <a className="law-link-row" href={LAW_URL} target="_blank" rel="noreferrer">
+            <span>법제처 AI 법령검색 바로가기</span>
+            <span>법령은 공식 사이트에서 확인 ↗</span>
+          </a>
+        </>
+      )}
+    </section>
+  );
+}
+
+function SearchSection({ title, tag, priority, note, children }) {
+  return (
+    <details className="search-section" open>
+      <summary className="search-section-head">
+        <span className="section-priority">{priority}</span>
+        <strong>{title}</strong>
+        {tag && <span className="section-tag">{tag}</span>}
+        <span className="section-caret">›</span>
+      </summary>
+      <div className="search-section-body">
+        {children}
+        {note && <p className="section-note">{note}</p>}
+      </div>
+    </details>
+  );
+}
+
+function CompanyResultCard({ item, appState }) {
+  const isFav = appState.favorites.includes(item.id);
+  const pdfUrl = item.pdf_url ? apiUrl(item.pdf_url) : null;
+  const pdfPage = item.pdf_page;
+  const viewerLink = pdfUrl ? pdfViewerLink(pdfUrl, pdfPage, item.title) : null;
+
+  return (
+    <div className="result-card company-card">
+      <div className="card-meta">
+        <span>{item.category}</span>
+        {item.section && <span>{item.section}</span>}
+        {appState.settings?.showIds && <span>{item.id}</span>}
+      </div>
+      <NavLink to={`/item/${item.id}`} className="card-title">{item.title}</NavLink>
+      <p className="card-summary">{item.summary}</p>
+      {pdfPage && <p className="card-page">p.{pdfPage}</p>}
+      <div className="card-actions">
+        {viewerLink && (
+          <NavLink className="btn-pdf" to={viewerLink}>PDF 보기</NavLink>
+        )}
+        <button className={isFav ? 'btn-fav active' : 'btn-fav'} onClick={() => toggleFavorite(item.id, appState)}>
+          {isFav ? '★ 즐겨찾기' : '☆ 즐겨찾기'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function KcscCard({ item }) {
+  return (
+    <div className="result-card kcsc-card">
+      <div className="card-meta">
+        <span>KCSC</span>
+        {item.category && <span>{item.category}</span>}
+        {item.id && <span>{item.id}</span>}
+      </div>
+      <strong className="card-title">{item.title}</strong>
+      {item.summary && <p className="card-summary">{item.summary}</p>}
+      {item.source_url && (
+        <div className="card-actions">
+          <a className="btn-outline" href={item.source_url} target="_blank" rel="noreferrer">원문 보기 ↗</a>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AiAnswerPanel({ state, appState }) {
+  const result = state.result;
+  const docRefs = result?.document_references || [];
+
+  return (
+    <details className="ai-panel" open>
+      <summary className="ai-panel-head">
+        <span className="section-priority ai-badge">AI</span>
+        <strong>AI 답변</strong>
+        <span className="section-tag">근거 기반 답변</span>
+        <span className="section-caret">›</span>
+      </summary>
+      <div className="ai-panel-body">
+        {state.status === 'loading' ? (
+          <div className="loading-row"><span className="spinner" />AI가 근거를 분석하고 있습니다...</div>
+        ) : state.status === 'error' ? (
+          <div className="section-empty">{state.error}</div>
+        ) : result ? (
+          <>
+            {result.provider_error && (
+              <div className="notice warning">외부 AI 호출 실패로 로컬 근거 요약을 표시했습니다.</div>
+            )}
+            <pre className="ai-answer-text">{result.answer}</pre>
+            <p className="ai-disclaimer">AI 답변은 참고용으로 활용하세요. PDF 원문을 반드시 확인하세요.</p>
+            {docRefs.length > 0 && (
+              <div className="ai-refs">
+                {docRefs.map((ref) => {
+                  const pdfUrl = ref.pdf_url ? apiUrl(ref.pdf_url) : null;
+                  const viewerLink = pdfUrl ? pdfViewerLink(pdfUrl, ref.page_start, ref.document_title) : null;
+                  const location = [ref.chapter, ref.section, ref.clause].filter(Boolean).join(' > ');
+                  return (
+                    <div key={ref.id} className="ai-ref-card">
+                      <div className="card-meta">
+                        <strong>{ref.document_title}</strong>
+                        {ref.version && <span>{ref.version}</span>}
+                      </div>
+                      {location && <p className="ref-location">{location}</p>}
+                      {ref.page_start && <p className="ref-page">p.{ref.page_start}</p>}
+                      {viewerLink && (
+                        <NavLink className="btn-pdf" to={viewerLink}>PDF 보기</NavLink>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="section-empty">검색어를 입력하면 AI 답변이 표시됩니다.</div>
+        )}
+      </div>
+    </details>
+  );
+}
+
+// ── Detail Page ───────────────────────────────────────────────────────────────
+
+function DetailPage({ appState }) {
+  const { id } = useParams();
+  const item = appState.items.find((entry) => entry.id === id);
+
+  useEffect(() => {
+    if (!item) return;
+    appState.setRecent((current) => [item.id, ...current.filter((sid) => sid !== item.id)].slice(0, 20));
+  }, [id]);
+
+  if (!item) {
+    return (
+      <section className="stack">
+        <NavLink className="back-link" to="/search">← 검색으로 돌아가기</NavLink>
+        <div className="empty-hint">항목을 찾을 수 없습니다.</div>
+      </section>
+    );
+  }
+
+  const isFav = appState.favorites.includes(item.id);
+  const pdfUrl = item.pdf_url ? apiUrl(item.pdf_url) : '';
+  const pdfPage = item.pdf_page;
+  const viewerLink = pdfUrl ? pdfViewerLink(pdfUrl, pdfPage, item.title) : '';
+
+  return (
+    <section className="stack">
+      <NavLink className="back-link" to="/search">← 검색으로 돌아가기</NavLink>
+      <article className="detail-card">
+        <div className="card-meta">
+          <span>{item.category}</span>
+          {item.section && <span>{item.section}</span>}
+        </div>
+        <h2>{item.title}</h2>
+        <p className="summary">{item.summary}</p>
+        {viewerLink ? (
+          <div className="pdf-area">
+            <NavLink className="btn-pdf large" to={viewerLink}>
+              PDF 보기{pdfPage ? ` · p.${pdfPage}` : ''}
+            </NavLink>
+          </div>
+        ) : item.body ? (
+          <p className="body-text">{item.body}</p>
+        ) : null}
+        <button className={isFav ? 'btn-fav active' : 'btn-fav'} onClick={() => toggleFavorite(item.id, appState)}>
+          {isFav ? '★ 즐겨찾기 해제' : '☆ 즐겨찾기 추가'}
+        </button>
+      </article>
+    </section>
+  );
+}
+
+// ── Site Issues Pages ─────────────────────────────────────────────────────────
+
+function SiteListPage() {
+  const navigate = useNavigate();
+  const [sites, setSites] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const data = await fetchJson('/api/sites');
+      setSites(data.sites || []);
+    } catch {
+      setError('현장 목록을 불러올 수 없습니다. 백엔드를 확인하세요.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  return (
+    <section className="stack">
+      <div className="page-header">
+        <h2>현장이슈 공유</h2>
+        <button className="btn-primary" onClick={() => navigate('/sites/new')}>+ 현장 등록</button>
+      </div>
+
+      {error && <div className="error-box">{error}</div>}
+      {loading ? (
+        <div className="loading-row"><span className="spinner" />불러오는 중...</div>
+      ) : sites.length === 0 ? (
+        <div className="empty-hint">
+          등록된 현장이 없습니다.<br />
+          <button className="btn-link" onClick={() => navigate('/sites/new')}>첫 현장을 등록하세요</button>
+        </div>
+      ) : sites.map((site) => (
+        <div className="site-card" key={site.id}>
+          <div className="site-card-header">
+            <strong>{site.site_name}</strong>
+            {site.site_scale && <span className="site-scale">{site.site_scale}</span>}
+          </div>
+          {(site.construction_start || site.construction_end) && (
+            <p className="site-period">
+              {site.construction_start && site.construction_end
+                ? `${site.construction_start} ~ ${site.construction_end}`
+                : site.construction_start || site.construction_end}
+            </p>
+          )}
+          <p className="site-counts">
+            도면검토 {site.drawing_review_count ?? 0}건 · 현장이슈 {site.issue_count ?? 0}건
+          </p>
+          <button className="btn-outline" onClick={() => navigate(`/sites/${site.id}`)}>열기</button>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function SiteFormPage() {
+  const navigate = useNavigate();
+  const [form, setForm] = useState({
+    site_name: '', site_scale: '', construction_start: '', construction_end: '',
+    manager_name: '', description: '',
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const set = (key, val) => setForm((f) => ({ ...f, [key]: val }));
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!form.site_name.trim()) { setError('현장명을 입력하세요.'); return; }
+    setLoading(true);
+    try {
+      await fetchJson('/api/sites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      navigate('/sites');
+    } catch {
+      setError('현장 등록에 실패했습니다.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="stack">
+      <div className="page-header">
+        <NavLink className="back-link" to="/sites">← 목록으로</NavLink>
+        <h2>현장 등록</h2>
+      </div>
+      <form className="form-card" onSubmit={submit}>
+        <label className="field-label">현장명 *</label>
+        <input value={form.site_name} onChange={(e) => set('site_name', e.target.value)} placeholder="예: A현장 복합시설 신축공사" />
+        <label className="field-label">현장규모</label>
+        <input value={form.site_scale} onChange={(e) => set('site_scale', e.target.value)} placeholder="예: 지하 3층 / 지상 15층 / 연면적 45,000㎡" />
+        <label className="field-label">공사 시작일</label>
+        <input value={form.construction_start} onChange={(e) => set('construction_start', e.target.value)} placeholder="예: 2025.03.01" />
+        <label className="field-label">공사 종료일</label>
+        <input value={form.construction_end} onChange={(e) => set('construction_end', e.target.value)} placeholder="예: 2027.02.28" />
+        <label className="field-label">담당자</label>
+        <input value={form.manager_name} onChange={(e) => set('manager_name', e.target.value)} placeholder="예: 홍길동" />
+        <label className="field-label">비고</label>
+        <textarea value={form.description} onChange={(e) => set('description', e.target.value)} placeholder="기계실 위치, 주요 공종 등" rows={3} />
+        {error && <div className="error-box">{error}</div>}
+        <button type="submit" className="btn-primary" disabled={loading}>{loading ? '등록 중...' : '현장 등록'}</button>
+      </form>
+    </section>
+  );
+}
+
+function SiteDetailPage() {
+  const { siteId } = useParams();
+  const navigate = useNavigate();
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [tab, setTab] = useState('review');
+  const [showReviewForm, setShowReviewForm] = useState(false);
+  const [showIssueForm, setShowIssueForm] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const resp = await fetchJson(`/api/sites/${siteId}`);
+      setData(resp);
+    } catch {
+      setError('현장 정보를 불러올 수 없습니다.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, [siteId]);
+
+  if (loading) return <section className="stack"><div className="loading-row"><span className="spinner" />불러오는 중...</div></section>;
+  if (error || !data) return <section className="stack"><div className="error-box">{error || '오류 발생'}</div></section>;
+
+  const site = data.site;
+  const reviews = data.drawing_reviews || [];
+  const issues = data.site_issues || [];
+
+  return (
+    <section className="stack">
+      <div className="page-header">
+        <NavLink className="back-link" to="/sites">← 현장 목록</NavLink>
+        <h2>{site.site_name}</h2>
+      </div>
+
+      <div className="site-info-card">
+        {site.site_scale && <p><span className="info-label">현장규모</span>{site.site_scale}</p>}
+        {(site.construction_start || site.construction_end) && (
+          <p><span className="info-label">공사기간</span>{site.construction_start} ~ {site.construction_end}</p>
+        )}
+        {site.manager_name && <p><span className="info-label">담당자</span>{site.manager_name}</p>}
+        {site.description && <p className="site-desc">{site.description}</p>}
+      </div>
+
+      <div className="tab-row">
+        <button className={tab === 'review' ? 'tab active' : 'tab'} onClick={() => setTab('review')}>
+          도면검토 {reviews.length}건
+        </button>
+        <button className={tab === 'issue' ? 'tab active' : 'tab'} onClick={() => setTab('issue')}>
+          현장이슈 {issues.length}건
+        </button>
+      </div>
+
+      {tab === 'review' && (
+        <>
+          <button className="btn-outline" onClick={() => setShowReviewForm(!showReviewForm)}>
+            {showReviewForm ? '취소' : '+ 도면검토 추가'}
+          </button>
+          {showReviewForm && (
+            <DrawingReviewForm siteId={siteId} onSaved={() => { setShowReviewForm(false); load(); }} />
+          )}
+          {reviews.length === 0 ? (
+            <div className="empty-hint">등록된 도면검토가 없습니다.</div>
+          ) : reviews.map((r) => (
+            <div className="issue-card" key={r.id}>
+              <div className="issue-header">
+                <strong>{r.review_content}</strong>
+                <StatusBadge status={r.status} />
+              </div>
+              {r.location && <p className="issue-loc">위치: {r.location}</p>}
+              {r.category && <p className="issue-meta">분류: {r.category}</p>}
+              {r.action_plan && <p className="issue-action">조치방향: {r.action_plan}</p>}
+            </div>
+          ))}
+        </>
+      )}
+
+      {tab === 'issue' && (
+        <>
+          <button className="btn-outline" onClick={() => setShowIssueForm(!showIssueForm)}>
+            {showIssueForm ? '취소' : '+ 이슈 추가'}
+          </button>
+          {showIssueForm && (
+            <SiteIssueForm siteId={siteId} onSaved={() => { setShowIssueForm(false); load(); }} />
+          )}
+          {issues.length === 0 ? (
+            <div className="empty-hint">등록된 현장이슈가 없습니다.</div>
+          ) : issues.map((iss) => (
+            <div className="issue-card" key={iss.id}>
+              <div className="issue-header">
+                <strong>{iss.issue_content}</strong>
+                <StatusBadge status={iss.status} type="issue" />
+              </div>
+              {iss.trade && <p className="issue-meta">공종: {iss.trade}</p>}
+              {iss.location && <p className="issue-loc">위치: {iss.location}</p>}
+              {iss.cause && <p className="issue-meta">원인: {iss.cause}</p>}
+              {iss.action_content && <p className="issue-action">조치: {iss.action_content}</p>}
+              {iss.related_standard && (
+                <p className="issue-ref">
+                  관련 기준: {iss.related_standard}
+                  {iss.related_page && ` p.${iss.related_page}`}
+                </p>
+              )}
+            </div>
+          ))}
+        </>
+      )}
+    </section>
+  );
+}
+
+function StatusBadge({ status, type }) {
+  const colorMap = {
+    '검토중': 'badge-blue', '협의중': 'badge-orange', '반영완료': 'badge-green', '보류': 'badge-gray',
+    '조치필요': 'badge-red', '조치완료': 'badge-green',
+  };
+  return <span className={`status-badge ${colorMap[status] || 'badge-gray'}`}>{status}</span>;
+}
+
+function DrawingReviewForm({ siteId, onSaved }) {
+  const STATUS_OPTIONS = ['검토중', '협의중', '반영완료', '보류'];
+  const [form, setForm] = useState({ category: '', location: '', review_content: '', action_plan: '', status: '검토중' });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!form.review_content.trim()) { setError('검토 내용을 입력하세요.'); return; }
+    setLoading(true);
+    try {
+      await fetchJson('/api/drawing-reviews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, site_id: siteId }),
+      });
+      onSaved();
+    } catch { setError('저장에 실패했습니다.'); } finally { setLoading(false); }
+  };
+
+  return (
+    <form className="form-card inline-form" onSubmit={submit}>
+      <label className="field-label">분류</label>
+      <input value={form.category} onChange={(e) => set('category', e.target.value)} placeholder="배관, 덕트, 전기 등" />
+      <label className="field-label">검토 위치</label>
+      <input value={form.location} onChange={(e) => set('location', e.target.value)} placeholder="예: 지하2층 기계실" />
+      <label className="field-label">검토 내용 *</label>
+      <textarea value={form.review_content} onChange={(e) => set('review_content', e.target.value)} rows={3} placeholder="검토 내용을 입력하세요" />
+      <label className="field-label">조치 방향</label>
+      <textarea value={form.action_plan} onChange={(e) => set('action_plan', e.target.value)} rows={2} placeholder="조치 방향" />
+      <label className="field-label">상태</label>
+      <select value={form.status} onChange={(e) => set('status', e.target.value)}>
+        {STATUS_OPTIONS.map((s) => <option key={s}>{s}</option>)}
+      </select>
+      {error && <div className="error-box">{error}</div>}
+      <button type="submit" className="btn-primary" disabled={loading}>{loading ? '저장 중...' : '저장'}</button>
+    </form>
+  );
+}
+
+function SiteIssueForm({ siteId, onSaved }) {
+  const STATUS_OPTIONS = ['조치필요', '검토중', '협의중', '조치완료'];
+  const TRADE_OPTIONS = ['배관공사', '보온공사', '덕트공사', '장비설치', '시험및검사', '기타'];
+  const [form, setForm] = useState({
+    trade: '', location: '', issue_content: '', cause: '', action_content: '',
+    status: '조치필요', related_standard: '', related_page: '',
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!form.issue_content.trim()) { setError('이슈 내용을 입력하세요.'); return; }
+    setLoading(true);
+    try {
+      await fetchJson('/api/site-issues', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, site_id: siteId }),
+      });
+      onSaved();
+    } catch { setError('저장에 실패했습니다.'); } finally { setLoading(false); }
+  };
+
+  return (
+    <form className="form-card inline-form" onSubmit={submit}>
+      <label className="field-label">공종</label>
+      <select value={form.trade} onChange={(e) => set('trade', e.target.value)}>
+        <option value="">선택</option>
+        {TRADE_OPTIONS.map((t) => <option key={t}>{t}</option>)}
+      </select>
+      <label className="field-label">위치</label>
+      <input value={form.location} onChange={(e) => set('location', e.target.value)} placeholder="예: 지하2층 기계실" />
+      <label className="field-label">이슈 내용 *</label>
+      <textarea value={form.issue_content} onChange={(e) => set('issue_content', e.target.value)} rows={3} placeholder="이슈 내용을 입력하세요" />
+      <label className="field-label">원인</label>
+      <input value={form.cause} onChange={(e) => set('cause', e.target.value)} placeholder="원인 분석" />
+      <label className="field-label">조치 내용</label>
+      <textarea value={form.action_content} onChange={(e) => set('action_content', e.target.value)} rows={2} placeholder="조치 완료 내용" />
+      <label className="field-label">상태</label>
+      <select value={form.status} onChange={(e) => set('status', e.target.value)}>
+        {STATUS_OPTIONS.map((s) => <option key={s}>{s}</option>)}
+      </select>
+      <label className="field-label">관련 기준</label>
+      <input value={form.related_standard} onChange={(e) => set('related_standard', e.target.value)} placeholder="예: 기계설비 시공표준 2026" />
+      <label className="field-label">관련 페이지</label>
+      <input value={form.related_page} onChange={(e) => set('related_page', e.target.value)} placeholder="예: 42" />
+      {error && <div className="error-box">{error}</div>}
+      <button type="submit" className="btn-primary" disabled={loading}>{loading ? '저장 중...' : '저장'}</button>
+    </form>
+  );
+}
+
+// ── Checklist Pages ───────────────────────────────────────────────────────────
+
+const TRADE_LIST = ['배관공사', '보온공사', '덕트공사', '장비설치', '시험및검사'];
+const TRADE_ICONS = { '배관공사': '🔧', '보온공사': '🌡', '덕트공사': '💨', '장비설치': '⚙', '시험및검사': '🧪' };
+
+function useSelectedSite() {
+  const [siteId, setSiteId] = useState(() => {
+    try { return localStorage.getItem(STORAGE_KEYS.checklistSite) || ''; } catch { return ''; }
+  });
+  const update = useCallback((next) => {
+    setSiteId(next);
+    try {
+      if (next) localStorage.setItem(STORAGE_KEYS.checklistSite, next);
+      else localStorage.removeItem(STORAGE_KEYS.checklistSite);
+    } catch {}
+  }, []);
+  return [siteId, update];
+}
+
+function ChecklistPage({ appState }) {
+  const navigate = useNavigate();
+  const [checklists, setChecklists] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [sites, setSites] = useState([]);
+  const [siteId, setSiteId] = useSelectedSite();
+  const [userId, setUserIdLocal] = useState(() => readUserId());
+  const [draftUser, setDraftUser] = useState(userId);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    const q = siteId ? `?site_id=${encodeURIComponent(siteId)}` : '';
+    fetchJson(`/api/checklists${q}`).then((data) => {
+      setChecklists(data.checklists || []);
+    }).catch(() => {
+      setChecklists(TRADE_LIST.map((trade) => ({ trade, item_count: 0, checked_count: 0, has_items: false })));
+    }).finally(() => setLoading(false));
+  }, [siteId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    fetchJson('/api/sites').then((data) => setSites(data.sites || [])).catch(() => setSites([]));
+  }, []);
+
+  const saveUser = () => {
+    const clean = draftUser.trim();
+    try {
+      if (clean) localStorage.setItem(STORAGE_KEYS.userId, clean);
+      else localStorage.removeItem(STORAGE_KEYS.userId);
+    } catch {}
+    setUserIdLocal(clean);
+    load();
+  };
+
+  return (
+    <section className="stack">
+      <div className="page-header">
+        <h2>체크리스트</h2>
+        <span className="page-subtitle">공종별 · 현장별 · 사용자별 점검</span>
+      </div>
+
+      <div className="settings-card">
+        <label className="field-label">사용자 이름 (개인화 식별자)</label>
+        <div className="search-row">
+          <input value={draftUser} onChange={(e) => setDraftUser(e.target.value)} placeholder="예: 홍길동 / 사번" />
+          <button type="button" onClick={saveUser}>저장</button>
+        </div>
+        {!userId && <p className="settings-note">이름을 저장하지 않으면 공용 영역(anonymous)으로 저장됩니다.</p>}
+        {userId && <p className="info-msg">사용 중: {userId}</p>}
+      </div>
+
+      <div className="settings-card">
+        <label className="field-label">현장 선택</label>
+        <select value={siteId} onChange={(e) => setSiteId(e.target.value)}>
+          <option value="">기본 (현장 미지정)</option>
+          {sites.map((s) => (
+            <option key={s.id} value={s.id}>{s.site_name}</option>
+          ))}
+        </select>
+        <p className="settings-note">항목과 체크 상태는 (사용자, 현장, 공종) 단위로 분리 저장됩니다.</p>
+      </div>
+
+      {loading ? (
+        <div className="loading-row"><span className="spinner" />불러오는 중...</div>
+      ) : TRADE_LIST.map((trade) => {
+        const info = checklists.find((c) => c.trade === trade) || { item_count: 0, checked_count: 0, has_items: false };
+        const target = `/checklist/${encodeURIComponent(trade)}${siteId ? `?site=${encodeURIComponent(siteId)}` : ''}`;
+        return (
+          <div className="checklist-card" key={trade} onClick={() => navigate(target)}>
+            <div className="checklist-card-left">
+              <span className="trade-icon">{TRADE_ICONS[trade] || '📋'}</span>
+              <div>
+                <strong>{trade}</strong>
+                <span className="checklist-progress">
+                  {info.has_items ? `${info.checked_count} / ${info.item_count}` : '항목 없음 · 템플릿 불러오기 가능'}
+                </span>
+              </div>
+            </div>
+            <span className="checklist-caret">›</span>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+function ChecklistDetailPage({ appState }) {
+  const { trade } = useParams();
+  const [searchParams] = useSearchParams();
+  const decodedTrade = decodeURIComponent(trade);
+  const siteId = searchParams.get('site') || '';
+  const [items, setItems] = useState([]);
+  const [records, setRecords] = useState({});
+  const [templateAvailable, setTemplateAvailable] = useState(false);
+  const [templateCount, setTemplateCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [addText, setAddText] = useState('');
+  const [addPage, setAddPage] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState('');
+  const [editPage, setEditPage] = useState('');
+  const userId = readUserId();
+
+  const load = useCallback(() => {
+    setLoading(true);
+    const q = siteId ? `?site_id=${encodeURIComponent(siteId)}` : '';
+    fetchJson(`/api/checklists/${encodeURIComponent(decodedTrade)}${q}`).then((data) => {
+      setItems(data.items || []);
+      setRecords(data.records || {});
+      setTemplateAvailable(!!data.template_available);
+      setTemplateCount(data.template_count || 0);
+      setError('');
+    }).catch(() => setError('체크리스트를 불러올 수 없습니다.')).finally(() => setLoading(false));
+  }, [decodedTrade, siteId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const STATUS_CYCLE = ['미체크', '적합', '해당없음', '부적합'];
+  const STATUS_ICONS = { '미체크': '□', '적합': '✓', '해당없음': '△', '부적합': '✕' };
+  const STATUS_CLASS = { '미체크': '', '적합': 'check-ok', '해당없음': 'check-na', '부적합': 'check-ng' };
+
+  const getStatus = (itemId) => records[itemId]?.status || '미체크';
+  const cycleStatus = async (itemId) => {
+    const current = getStatus(itemId);
+    const next = STATUS_CYCLE[(STATUS_CYCLE.indexOf(current) + 1) % STATUS_CYCLE.length];
+    setRecords((r) => ({ ...r, [itemId]: { ...(r[itemId] || {}), status: next, item_id: itemId } }));
+    try {
+      await fetchJson('/api/checklists/record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trade: decodedTrade, item_id: itemId, status: next, memo: records[itemId]?.memo || '', site_id: siteId }),
+      });
+    } catch {
+      setError('상태 저장 실패 — 서버 연결을 확인하세요.');
+    }
+  };
+
+  const loadTemplate = async () => {
+    setBusy(true); setError('');
+    try {
+      await fetchJson('/api/checklists/load-template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ site_id: siteId, trade: decodedTrade }),
+      });
+      await load();
+    } catch (err) {
+      setError(`템플릿 불러오기 실패: ${err.message}`);
+    } finally { setBusy(false); }
+  };
+
+  const addItem = async (e) => {
+    e.preventDefault();
+    if (!addText.trim()) return;
+    setBusy(true); setError('');
+    try {
+      await fetchJson('/api/checklists/items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ site_id: siteId, trade: decodedTrade, text: addText, related_page: addPage }),
+      });
+      setAddText(''); setAddPage('');
+      await load();
+    } catch (err) {
+      setError(`항목 추가 실패: ${err.message}`);
+    } finally { setBusy(false); }
+  };
+
+  const startEdit = (item) => {
+    setEditingId(item.id);
+    setEditText(item.text);
+    setEditPage(item.related_page || '');
+  };
+
+  const saveEdit = async () => {
+    if (!editText.trim()) return;
+    setBusy(true); setError('');
+    try {
+      await fetchJson(`/api/checklists/items/${encodeURIComponent(editingId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: editText, related_page: editPage }),
+      });
+      setEditingId(null);
+      await load();
+    } catch (err) {
+      setError(`수정 실패: ${err.message}`);
+    } finally { setBusy(false); }
+  };
+
+  const deleteItem = async (itemId) => {
+    if (!window.confirm('이 항목을 삭제할까요? 체크 기록도 함께 삭제됩니다.')) return;
+    setBusy(true); setError('');
+    try {
+      await fetchJson(`/api/checklists/items/${encodeURIComponent(itemId)}`, { method: 'DELETE' });
+      await load();
+    } catch (err) {
+      setError(`삭제 실패: ${err.message}`);
+    } finally { setBusy(false); }
+  };
+
+  const checked = items.filter((item) => ['적합', '해당없음'].includes(getStatus(item.id))).length;
+
+  return (
+    <section className="stack">
+      <div className="page-header">
+        <NavLink className="back-link" to="/checklist">← 목록</NavLink>
+        <h2>{decodedTrade}</h2>
+        {items.length > 0 && (
+          <span className="checklist-progress-badge">{checked} / {items.length}</span>
+        )}
+      </div>
+
+      <div className="settings-note">
+        사용자: <strong>{userId || 'anonymous'}</strong> · 현장: <strong>{siteId || '기본'}</strong>
+      </div>
+
+      {loading ? (
+        <div className="loading-row"><span className="spinner" />불러오는 중...</div>
+      ) : (
+        <>
+          {error && <div className="error-box">{error}</div>}
+
+          {items.length === 0 && (
+            <div className="settings-card">
+              <h3>항목이 없습니다</h3>
+              {templateAvailable && templateCount > 0 && (
+                <>
+                  <p className="settings-note">{templateCount}개의 기본 점검 항목을 내 리스트로 복사할 수 있습니다.</p>
+                  <button className="btn-primary" disabled={busy} onClick={loadTemplate}>
+                    기본 템플릿 불러오기 ({templateCount}개)
+                  </button>
+                </>
+              )}
+              <p className="settings-note" style={{ marginTop: 8 }}>또는 아래에서 직접 항목을 추가하세요.</p>
+            </div>
+          )}
+
+          {items.length > 0 && (
+            <div className="progress-bar-wrap">
+              <div className="progress-bar" style={{ width: `${Math.round((checked / items.length) * 100)}%` }} />
+            </div>
+          )}
+
+          <div className="check-items">
+            {items.map((item) => {
+              const status = getStatus(item.id);
+              const isEditing = editingId === item.id;
+              if (isEditing) {
+                return (
+                  <div className="check-item" key={item.id}>
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <input value={editText} onChange={(e) => setEditText(e.target.value)} placeholder="항목 내용" />
+                      <input value={editPage} onChange={(e) => setEditPage(e.target.value)} placeholder="관련 페이지 (선택)" />
+                      <div className="button-row">
+                        <button className="btn-primary" disabled={busy} onClick={saveEdit}>저장</button>
+                        <button className="btn-ghost" onClick={() => setEditingId(null)}>취소</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div className={`check-item ${STATUS_CLASS[status]}`} key={item.id}>
+                  <button className="check-status-btn" onClick={() => cycleStatus(item.id)}>
+                    {STATUS_ICONS[status]}
+                  </button>
+                  <span className="check-text">{item.text}</span>
+                  {item.related_page && (
+                    <span className="check-page" title={`관련 기준 p.${item.related_page}`}>p.{item.related_page}</span>
+                  )}
+                  <button className="btn-ghost" title="수정" onClick={() => startEdit(item)}>✏️</button>
+                  <button className="btn-ghost" title="삭제" onClick={() => deleteItem(item.id)}>🗑️</button>
+                </div>
+              );
+            })}
+          </div>
+
+          <form className="settings-card" onSubmit={addItem}>
+            <h3>+ 항목 추가</h3>
+            <input value={addText} onChange={(e) => setAddText(e.target.value)} placeholder="점검 항목 내용을 입력하세요" />
+            <input value={addPage} onChange={(e) => setAddPage(e.target.value)} placeholder="관련 페이지 (선택)" style={{ marginTop: 6 }} />
+            <button type="submit" className="btn-primary" disabled={busy || !addText.trim()} style={{ marginTop: 8 }}>
+              {busy ? '저장 중...' : '추가'}
+            </button>
+          </form>
+
+          {items.length > 0 && (
+            <div className="check-legend">
+              <span>□ 미체크</span><span className="check-ok">✓ 적합</span>
+              <span className="check-na">△ 해당없음</span><span className="check-ng">✕ 부적합</span>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+// ── Saved Page ────────────────────────────────────────────────────────────────
+
+function SavedPage({ appState }) {
+  const [tab, setTab] = useState('fav');
+  const items = appState.items;
+  const favoriteItems = appState.favorites.map((id) => items.find((item) => item.id === id)).filter(Boolean);
+  const recentItems = appState.recent.map((id) => items.find((item) => item.id === id)).filter(Boolean);
+
+  return (
+    <section className="stack">
+      <div className="page-header">
+        <h2>즐겨찾기 / 최근 본 항목</h2>
+      </div>
+      <div className="tab-row">
+        <button className={tab === 'fav' ? 'tab active' : 'tab'} onClick={() => setTab('fav')}>
+          즐겨찾기 {favoriteItems.length}
+        </button>
+        <button className={tab === 'recent' ? 'tab active' : 'tab'} onClick={() => setTab('recent')}>
+          최근 본 항목 {recentItems.length}
+        </button>
+      </div>
+      {tab === 'fav' && (
+        favoriteItems.length === 0
+          ? <div className="empty-hint">즐겨찾기가 없습니다. 검색 결과에서 ☆을 눌러 추가하세요.</div>
+          : favoriteItems.map((item) => <SavedItemCard key={item.id} item={item} appState={appState} />)
+      )}
+      {tab === 'recent' && (
+        recentItems.length === 0
+          ? <div className="empty-hint">최근 본 항목이 없습니다.</div>
+          : recentItems.map((item) => <SavedItemCard key={item.id} item={item} appState={appState} />)
+      )}
+    </section>
+  );
+}
+
+function SavedItemCard({ item, appState }) {
+  const isFav = appState.favorites.includes(item.id);
+  const pdfUrl = item.pdf_url ? apiUrl(item.pdf_url) : null;
+  const pdfPage = item.pdf_page;
+  const viewerLink = pdfUrl ? pdfViewerLink(pdfUrl, pdfPage, item.title) : null;
+
+  return (
+    <div className="result-card">
+      <div className="card-meta">
+        <span>{item.category}</span>
+        {item.section && <span>{item.section}</span>}
+        {pdfPage && <span>p.{pdfPage}</span>}
+      </div>
+      <NavLink to={`/item/${item.id}`} className="card-title">{item.title}</NavLink>
+      <p className="card-summary">{item.summary}</p>
+      <div className="card-actions">
+        {viewerLink && (
+          <NavLink className="btn-pdf" to={viewerLink}>PDF 보기</NavLink>
+        )}
+        <button className={isFav ? 'btn-fav active' : 'btn-fav'} onClick={() => toggleFavorite(item.id, appState)}>
+          {isFav ? '★' : '☆'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Settings Page ─────────────────────────────────────────────────────────────
+
+function SettingsPage({ appState }) {
+  return (
+    <section className="stack">
+      <div className="page-header">
+        <h2>설정</h2>
+      </div>
+
+      <GeminiKeyCard />
+      <AdminTokenCard />
+
+      <div className="settings-card">
+        <h3>화면 설정</h3>
+        <label className="setting-row">
+          <span><strong>간격 줄이기</strong><small>작은 화면에서 더 많은 항목 표시</small></span>
+          <input type="checkbox" checked={appState.settings.compactMode}
+            onChange={(e) => appState.setSettings({ ...appState.settings, compactMode: e.target.checked })} />
+        </label>
+        <label className="setting-row">
+          <span><strong>큰 터치 영역</strong><small>현장 장갑 사용을 고려한 버튼 간격</small></span>
+          <input type="checkbox" checked={appState.settings.largeTouch}
+            onChange={(e) => appState.setSettings({ ...appState.settings, largeTouch: e.target.checked })} />
+        </label>
+        <label className="setting-row">
+          <span><strong>표준 ID 표시</strong><small>검색 결과에 문서 ID 표시</small></span>
+          <input type="checkbox" checked={appState.settings.showIds}
+            onChange={(e) => appState.setSettings({ ...appState.settings, showIds: e.target.checked })} />
+        </label>
+      </div>
+
+      <div className="settings-card">
+        <h3>데이터 관리</h3>
+        <NavLink className="btn-outline block" to="/admin">관리자 문서 관리</NavLink>
+        <button className="btn-danger" style={{ marginTop: 8 }} onClick={() => {
+          if (window.confirm('저장된 즐겨찾기, 체크리스트, 설정이 모두 삭제됩니다. 계속하시겠습니까?')) {
+            localStorage.clear();
+            location.reload();
+          }
+        }}>로컬 저장 데이터 초기화</button>
+      </div>
+
+      <div className="settings-card">
+        <h3>법령 검색</h3>
+        <a className="btn-outline block" href={LAW_URL} target="_blank" rel="noreferrer">
+          법제처 AI 법령검색 바로가기 ↗
+        </a>
+        <p className="settings-note">법령검색 결과는 참고용입니다. 현장 적용 전 회사 표준지침, 설계도서, 계약서, 감리 지시사항과 함께 확인하세요.</p>
+      </div>
+    </section>
+  );
+}
+
+function GeminiKeyCard() {
+  const [storedKey, setStoredKey] = useState(() => readUserGeminiKey());
+  const [draft, setDraft] = useState(storedKey);
+  const [reveal, setReveal] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const masked = storedKey ? (storedKey.length <= 8 ? '••••••••' : storedKey.slice(0, 4) + '••••' + storedKey.slice(-4)) : '';
+
+  const save = () => {
+    const clean = draft.trim();
+    try {
+      if (clean) localStorage.setItem(STORAGE_KEYS.geminiUserKey, clean);
+      else localStorage.removeItem(STORAGE_KEYS.geminiUserKey);
+      setStoredKey(clean); setSaved(true); setTimeout(() => setSaved(false), 2000);
+    } catch {}
+  };
+  const clear = () => {
+    setDraft('');
+    try { localStorage.removeItem(STORAGE_KEYS.geminiUserKey); } catch {}
+    setStoredKey('');
+  };
+
+  return (
+    <div className="settings-card">
+      <h3>Google Gemini API Key</h3>
+      <p className="settings-note">본인의 Gemini 키를 입력하면 AI 답변이 내 키로 호출됩니다. 키는 이 기기 브라우저에만 저장됩니다.{' '}
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">키 발급 ↗</a>
+      </p>
+      <input type={reveal ? 'text' : 'password'} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="AIza... 로 시작하는 키 붙여넣기" autoComplete="off" />
+      <div className="button-row">
+        <button className="btn-primary" onClick={save}>저장</button>
+        <button className="btn-outline" onClick={() => setReveal((v) => !v)}>{reveal ? '숨기기' : '보기'}</button>
+        {storedKey && <button className="btn-ghost" onClick={clear}>지우기</button>}
+      </div>
+      {saved && <p className="success-msg">저장되었습니다.</p>}
+      {storedKey && !saved && <p className="info-msg">내 키 사용 중: {masked}</p>}
+    </div>
+  );
+}
+
+function AdminTokenCard() {
+  const [storedToken, setStoredToken] = useState(() => readAdminToken());
+  const [draft, setDraft] = useState(storedToken);
+  const [reveal, setReveal] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const masked = storedToken ? (storedToken.length <= 8 ? '••••••••' : storedToken.slice(0, 4) + '••••' + storedToken.slice(-4)) : '';
+
+  const save = () => {
+    const clean = draft.trim();
+    try {
+      if (clean) localStorage.setItem(STORAGE_KEYS.adminToken, clean);
+      else localStorage.removeItem(STORAGE_KEYS.adminToken);
+      setStoredToken(clean); setSaved(true); setTimeout(() => setSaved(false), 2000);
+    } catch {}
+  };
+  const clear = () => {
+    setDraft('');
+    try { localStorage.removeItem(STORAGE_KEYS.adminToken); } catch {}
+    setStoredToken('');
+  };
+
+  return (
+    <div className="settings-card">
+      <h3>Admin Token</h3>
+      <p className="settings-note">문서 업로드와 데이터 관리는 서버의 ADMIN_TOKEN과 같은 값이 필요합니다.</p>
+      <input type={reveal ? 'text' : 'password'} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="backend/.env의 ADMIN_TOKEN 입력" autoComplete="off" />
+      <div className="button-row">
+        <button className="btn-primary" onClick={save}>저장</button>
+        <button className="btn-outline" onClick={() => setReveal((v) => !v)}>{reveal ? '숨기기' : '보기'}</button>
+        {storedToken && <button className="btn-ghost" onClick={clear}>지우기</button>}
+      </div>
+      {saved && <p className="success-msg">저장되었습니다.</p>}
+      {storedToken && !saved && <p className="info-msg">관리자 토큰 사용 중: {masked}</p>}
+    </div>
+  );
+}
+
+// ── Admin Page ────────────────────────────────────────────────────────────────
+
+function AdminPage({ appState }) {
+  const [status, setStatus] = useState(null);
+  const [documents, setDocuments] = useState([]);
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [parseForm, setParseForm] = useState({ document_title: '', version: '', revision_date: '' });
+
+  const load = async () => {
+    try {
+      const [statusData, docsData] = await Promise.all([fetchJson('/api/rag/status'), fetchJson('/api/rag/documents')]);
+      setStatus(statusData);
+      setDocuments(docsData.documents || []);
+    } catch { setMessage('백엔드에 연결할 수 없습니다.'); }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const uploadFile = async (event, useFirecrawl) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setLoading(true); setMessage('');
+    const form = new FormData();
+    form.append('file', file);
+    if (useFirecrawl) {
+      form.append('document_title', parseForm.document_title || file.name.replace(/\.[^.]+$/, ''));
+      form.append('version', parseForm.version);
+      form.append('revision_date', parseForm.revision_date);
+    } else {
+      form.append('document_title', file.name.replace(/\.[^.]+$/, ''));
+    }
+    const endpoint = useFirecrawl ? '/api/rag/parse-pdf' : '/api/rag/upload';
+    try {
+      await fetchJson(endpoint, { method: 'POST', body: form });
+      setMessage(`${file.name} 문서를 인덱싱했습니다.`);
+      await load();
+    } catch (err) {
+      setMessage(`업로드 실패: ${err.message}`);
+    } finally {
+      event.target.value = ''; setLoading(false);
+    }
+  };
+
+  return (
+    <section className="stack">
+      <div className="page-header">
+        <NavLink className="back-link" to="/settings">← 설정</NavLink>
+        <h2>관리자 문서 관리</h2>
+      </div>
+
+      <div className="settings-card">
+        <h3>표준지침 상태</h3>
+        <p>문서 {status?.documents ?? 0}개 · 청크 {status?.chunks ?? 0}개</p>
+        <button className="btn-outline" onClick={load}>새로고침</button>
+      </div>
+
+      <div className="settings-card">
+        <h3>Firecrawl PDF 파싱 (권장)</h3>
+        <p className="settings-note">Firecrawl /parse를 사용해 표준지침 PDF를 고품질로 파싱합니다. FIRECRAWL_API_KEY가 필요합니다.</p>
+        <label className="field-label">문서명</label>
+        <input value={parseForm.document_title} onChange={(e) => setParseForm({ ...parseForm, document_title: e.target.value })} placeholder="예: 기계설비 시공표준 2026" />
+        <label className="field-label">버전</label>
+        <input value={parseForm.version} onChange={(e) => setParseForm({ ...parseForm, version: e.target.value })} placeholder="예: 2026" />
+        <label className="field-label">개정일</label>
+        <input value={parseForm.revision_date} onChange={(e) => setParseForm({ ...parseForm, revision_date: e.target.value })} placeholder="예: 2026-03-01" />
+        <label className="file-upload-btn">
+          Firecrawl로 PDF 파싱
+          <input type="file" accept=".pdf" onChange={(e) => uploadFile(e, true)} disabled={loading} style={{ display: 'none' }} />
+        </label>
+      </div>
+
+      <div className="settings-card">
+        <h3>일반 PDF 업로드</h3>
+        <p className="settings-note">PyPDF를 사용한 기본 파싱입니다. TXT, MD, JSON, PDF, DOCX 지원.</p>
+        <label className="file-upload-btn secondary">
+          파일 업로드
+          <input type="file" accept=".txt,.md,.json,.pdf,.docx" onChange={(e) => uploadFile(e, false)} disabled={loading} style={{ display: 'none' }} />
+        </label>
+      </div>
+
+      {message && <div className="info-msg-box">{message}</div>}
+
+      <div className="settings-card">
+        <h3>인덱싱된 문서</h3>
+        {documents.length === 0 ? (
+          <p className="settings-note">아직 업로드된 문서가 없습니다.</p>
+        ) : documents.map((doc) => (
+          <div className="doc-row" key={doc.id}>
+            <strong>{doc.title || doc.filename}</strong>
+            <span>{doc.filename} · {doc.chunk_count}청크{doc.version ? ` · v${doc.version}` : ''}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// ── PDF Viewer (in-app) ───────────────────────────────────────────────────────
+
+function PdfViewerPage() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const url = searchParams.get('url') || '';
+  const initialPage = Math.max(1, parseInt(searchParams.get('page') || '1', 10) || 1);
+  const title = searchParams.get('title') || 'PDF 보기';
+
+  const canvasRef = useRef(null);
+  const pdfRef = useRef(null);
+  const renderTaskRef = useRef(null);
+  const [numPages, setNumPages] = useState(0);
+  const [pageNum, setPageNum] = useState(initialPage);
+  const [zoom, setZoom] = useState(1.0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setError('');
+    const adminToken = readAdminToken();
+    const headers = {};
+    if (adminToken && url.includes('/api/rag/')) headers['X-Admin-Token'] = adminToken;
+
+    const task = pdfjsLib.getDocument({ url, httpHeaders: headers, withCredentials: false });
+    task.promise.then((pdf) => {
+      if (cancelled) return;
+      pdfRef.current = pdf;
+      setNumPages(pdf.numPages);
+      setPageNum((p) => Math.min(Math.max(1, p), pdf.numPages));
+      setLoading(false);
+    }).catch((err) => {
+      if (cancelled) return;
+      setError(`PDF를 불러올 수 없습니다: ${err.message || err}`);
+      setLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+      try { task.destroy(); } catch {}
+      if (pdfRef.current) { try { pdfRef.current.destroy(); } catch {} pdfRef.current = null; }
+    };
+  }, [url]);
+
+  useEffect(() => {
+    const pdf = pdfRef.current;
+    const canvas = canvasRef.current;
+    if (!pdf || !canvas || pageNum < 1 || pageNum > pdf.numPages) return;
+    let cancelled = false;
+
+    if (renderTaskRef.current) {
+      try { renderTaskRef.current.cancel(); } catch {}
+    }
+
+    pdf.getPage(pageNum).then((page) => {
+      if (cancelled) return;
+      const containerWidth = canvas.parentElement?.clientWidth || window.innerWidth;
+      const baseViewport = page.getViewport({ scale: 1 });
+      const fitScale = (containerWidth - 16) / baseViewport.width;
+      const scale = Math.max(0.5, fitScale * zoom);
+      const viewport = page.getViewport({ scale });
+      const ctx = canvas.getContext('2d');
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(viewport.width * ratio);
+      canvas.height = Math.floor(viewport.height * ratio);
+      canvas.style.width = `${Math.floor(viewport.width)}px`;
+      canvas.style.height = `${Math.floor(viewport.height)}px`;
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      const task = page.render({ canvasContext: ctx, viewport });
+      renderTaskRef.current = task;
+      task.promise.catch((err) => {
+        if (err?.name !== 'RenderingCancelledException') console.error('PDF render error', err);
+      });
+    });
+
+    return () => { cancelled = true; };
+  }, [pageNum, zoom, numPages]);
+
+  const goPrev = () => setPageNum((p) => Math.max(1, p - 1));
+  const goNext = () => setPageNum((p) => Math.min(numPages || p, p + 1));
+  const zoomIn = () => setZoom((z) => Math.min(4, +(z + 0.25).toFixed(2)));
+  const zoomOut = () => setZoom((z) => Math.max(0.5, +(z - 0.25).toFixed(2)));
+  const zoomReset = () => setZoom(1.0);
+
+  return (
+    <section className="pdf-viewer-page">
+      <div className="pdf-viewer-toolbar">
+        <button className="btn-ghost" onClick={() => navigate(-1)}>← 닫기</button>
+        <strong className="pdf-viewer-title">{title}</strong>
+        <a className="btn-outline" href={url} target="_blank" rel="noreferrer" title="외부 브라우저로 열기">↗</a>
+      </div>
+
+      {loading ? (
+        <div className="loading-row" style={{ padding: 24 }}><span className="spinner" />PDF 불러오는 중...</div>
+      ) : error ? (
+        <div className="error-box" style={{ margin: 16 }}>{error}</div>
+      ) : (
+        <>
+          <div className="pdf-viewer-canvas-wrap">
+            <canvas ref={canvasRef} className="pdf-viewer-canvas" />
+          </div>
+          <div className="pdf-viewer-controls">
+            <button className="btn-outline" onClick={goPrev} disabled={pageNum <= 1}>◀</button>
+            <input
+              className="pdf-page-input"
+              type="number"
+              min={1}
+              max={numPages}
+              value={pageNum}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!Number.isNaN(v)) setPageNum(Math.min(Math.max(1, v), numPages));
+              }}
+            />
+            <span className="pdf-page-total">/ {numPages}</span>
+            <button className="btn-outline" onClick={goNext} disabled={pageNum >= numPages}>▶</button>
+            <span className="pdf-zoom-controls">
+              <button className="btn-outline" onClick={zoomOut} title="축소">−</button>
+              <button className="btn-outline" onClick={zoomReset} title="원래 크기">{Math.round(zoom * 100)}%</button>
+              <button className="btn-outline" onClick={zoomIn} title="확대">+</button>
+            </span>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+createRoot(document.getElementById('root')).render(<App />);

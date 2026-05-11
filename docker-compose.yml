@@ -1,0 +1,13 @@
+services:
+  facility-standard-app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/data:/app/backend/data
+      - ./backend/uploads:/app/backend/uploads
+      - ./backend/reports:/app/backend/reports
+      - ./backend/backups:/app/backend/backups
+    restart: unless-stopped
