@@ -1,16 +1,18 @@
 services:
   - type: web
-    name: facility-standard-app-backend
-    env: python
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    name: ssyeng-standard
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
     envVars:
       - key: APP_ENV
         value: production
       - key: AI_PROVIDER
         value: gemini
+      - key: ADMIN_TOKEN
+        sync: false           # Render 대시보드에서 강력한 랜덤 값으로 입력
       - key: GEMINI_API_KEY
-        sync: false
+        sync: false           # Google AI Studio 키 (선택; 없으면 로컬 fallback)
       - key: CORS_ALLOW_ORIGINS
-        value: https://VERCEL_FRONTEND_URL_TO_BE_SET
+        value: "*"            # 사내 단일 서비스이므로 와일드카드 OK
