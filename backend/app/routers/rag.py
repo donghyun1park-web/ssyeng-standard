@@ -3,11 +3,10 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from app.services.admin_auth import require_admin_token
 from app.services.document_rag import DocumentRagStore
 
 router = APIRouter(tags=["rag"])
@@ -45,7 +44,7 @@ def rag_search(q: str, limit: int = 5):
     return {"ok": True, "query": q, "results": rag_store.search(q, limit=limit)}
 
 
-@router.post("/rag/index-text", dependencies=[Depends(require_admin_token)])
+@router.post("/rag/index-text")
 def rag_index_text(payload: TextIndexRequest):
     try:
         document = rag_store.add_text_document(payload.text, title=payload.title)
@@ -54,7 +53,7 @@ def rag_index_text(payload: TextIndexRequest):
     return {"ok": True, "document": document, "status": rag_store.status()}
 
 
-@router.post("/rag/upload", dependencies=[Depends(require_admin_token)])
+@router.post("/rag/upload")
 async def rag_upload(
     file: UploadFile = File(...),
     title: str | None = Form(default=None),
@@ -87,17 +86,17 @@ async def rag_upload(
     return {"ok": True, "document": document, "status": rag_store.status()}
 
 
-@router.post("/rag/parse-pdf", dependencies=[Depends(require_admin_token)])
+@router.post("/rag/parse-pdf")
 async def rag_parse_pdf(
     file: UploadFile = File(...),
     document_title: str = Form(...),
     version: str = Form(default=""),
     revision_date: str = Form(default=""),
 ):
-    """Firecrawl /parse를 사용해 PDF를 파싱하고 RAG 인덱스에 추가합니다."""
+    """pdfplumber를 사용해 PDF를 고품질로 파싱하고 RAG 인덱스에 추가합니다."""
     suffix = Path(file.filename or "").suffix.lower()
     if suffix != ".pdf":
-        raise HTTPException(status_code=400, detail="Firecrawl 파싱은 PDF 파일만 지원합니다.")
+        raise HTTPException(status_code=400, detail="PDF 파일만 지원합니다.")
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp:
         temp_path = Path(temp.name)
