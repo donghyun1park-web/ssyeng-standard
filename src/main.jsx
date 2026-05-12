@@ -316,6 +316,7 @@ function SearchPage({ appState }) {
   const [submitted, setSubmitted] = useState(initialQ);
   const [kcscState, setKcscState] = useState({ status: 'idle', items: [], error: '' });
   const [aiState, setAiState] = useState({ status: 'idle', result: null, error: '' });
+  const [ragState, setRagState] = useState({ status: 'idle', items: [], error: '' });
 
   const companyResults = useMemo(() => filterLocalItems(appState.items, submitted).slice(0, 8), [appState.items, submitted]);
 
@@ -328,6 +329,7 @@ function SearchPage({ appState }) {
 
     setKcscState({ status: 'loading', items: [], error: '' });
     setAiState({ status: 'loading', result: null, error: '' });
+    setRagState({ status: 'loading', items: [], error: '' });
 
     fetchJson('/api/external/search', {
       method: 'POST',
@@ -344,6 +346,10 @@ function SearchPage({ appState }) {
       body: JSON.stringify({ question: q, top_k: 5 }),
     }).then((data) => setAiState({ status: 'ready', result: data, error: '' }))
       .catch(() => setAiState({ status: 'error', result: null, error: 'AI 답변을 가져올 수 없습니다.' }));
+
+    fetchJson(`/api/rag/search?q=${encodeURIComponent(q)}&limit=5`)
+      .then((data) => setRagState({ status: 'ready', items: data.results || [], error: '' }))
+      .catch(() => setRagState({ status: 'ready', items: [], error: '' }));
   }, [query, searchParams, setSearchParams]);
 
   useEffect(() => {
@@ -392,8 +398,34 @@ function SearchPage({ appState }) {
             ))}
           </SearchSection>
 
-          {/* 3순위: KCSC 참고 기준 */}
-          <SearchSection title="KCSC 참고 기준" tag="국가건설기준센터" priority={2} note="KCSC는 참고 기준입니다. 현장 적용은 회사 표준지침과 계약도서를 우선 확인하세요.">
+          {/* 3순위: 업로드된 문서 (RAG) */}
+          {(ragState.status === 'loading' || ragState.items.length > 0) && (
+            <SearchSection title="업로드된 표준 문서" tag="PDF 검색" priority={3}>
+              {ragState.status === 'loading' ? (
+                <div className="loading-row"><span className="spinner" />문서 검색 중...</div>
+              ) : ragState.items.map((chunk) => {
+                const pdfUrl = chunk.pdf_url ? apiUrl(chunk.pdf_url) : null;
+                const viewerLink = pdfUrl ? pdfViewerLink(pdfUrl, chunk.page_start, chunk.document_title) : null;
+                const location = [chunk.chapter, chunk.section, chunk.clause].filter(Boolean).join(' > ');
+                return (
+                  <div key={chunk.id} className="result-card">
+                    <div className="card-meta">
+                      <strong>{chunk.document_title}</strong>
+                      {chunk.page_start && <span>p.{chunk.page_start}</span>}
+                    </div>
+                    {location && <p className="ref-location">{location}</p>}
+                    <p className="summary">{(chunk.text || '').slice(0, 160)}…</p>
+                    {viewerLink && (
+                      <NavLink className="btn-pdf" to={viewerLink}>PDF 보기</NavLink>
+                    )}
+                  </div>
+                );
+              })}
+            </SearchSection>
+          )}
+
+          {/* 4순위: KCSC 참고 기준 */}
+          <SearchSection title="KCSC 참고 기준" tag="국가건설기준센터" priority={4} note="KCSC는 참고 기준입니다. 현장 적용은 회사 표준지침과 계약도서를 우선 확인하세요.">
             {kcscState.status === 'loading' ? (
               <div className="loading-row"><span className="spinner" />검색 중...</div>
             ) : kcscState.status === 'error' ? (
