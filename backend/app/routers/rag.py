@@ -114,7 +114,7 @@ async def rag_parse_pdf(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Firecrawl 처리 오류: {exc}") from exc
+        raise HTTPException(status_code=500, detail=f"고급 PDF 파싱 오류: {exc}") from exc
     finally:
         temp_path.unlink(missing_ok=True)
 

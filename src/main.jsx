@@ -1489,8 +1489,8 @@ function AdminPage({ appState }) {
       </div>
 
       <div className="settings-card">
-        <h3>Firecrawl PDF 파싱 (권장)</h3>
-        <p className="settings-note">Firecrawl /parse를 사용해 표준지침 PDF를 고품질로 파싱합니다. FIRECRAWL_API_KEY가 필요합니다.</p>
+        <h3>고급 PDF 파싱 (권장)</h3>
+        <p className="settings-note">pdfplumber를 사용해 표준지침 PDF를 고품질로 파싱합니다. 컬럼 레이아웃·표·한국어 텍스트 추출에 강합니다.</p>
         <label className="field-label">문서명</label>
         <input value={parseForm.document_title} onChange={(e) => setParseForm({ ...parseForm, document_title: e.target.value })} placeholder="예: 기계설비 시공표준 2026" />
         <label className="field-label">버전</label>
@@ -1498,7 +1498,7 @@ function AdminPage({ appState }) {
         <label className="field-label">개정일</label>
         <input value={parseForm.revision_date} onChange={(e) => setParseForm({ ...parseForm, revision_date: e.target.value })} placeholder="예: 2026-03-01" />
         <label className="file-upload-btn">
-          Firecrawl로 PDF 파싱
+          고급 파싱으로 PDF 업로드
           <input type="file" accept=".pdf" onChange={(e) => uploadFile(e, true)} disabled={loading} style={{ display: 'none' }} />
         </label>
       </div>

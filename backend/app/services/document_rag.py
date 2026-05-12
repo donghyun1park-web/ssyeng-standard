@@ -175,29 +175,38 @@ def extract_text(path: Path) -> str:
     raise ValueError(f"지원하지 않는 파일 형식입니다: {suffix}")
 
 
-async def _firecrawl_parse(file_path: Path, api_key: str) -> str:
-    """Call Firecrawl /parse endpoint and return extracted Markdown text."""
-    import httpx
+def _read_pdf_advanced(path: Path) -> str:
+    """pdfplumber를 사용한 고급 PDF 텍스트 추출.
+    pypdf보다 컬럼 레이아웃·표·한국어 텍스트 추출 품질이 높습니다.
+    """
+    try:
+        import pdfplumber
+    except ImportError:
+        raise ValueError(
+            "pdfplumber가 설치되지 않았습니다. "
+            "`pip install pdfplumber` 후 백엔드를 재시작하세요."
+        )
 
-    url = "https://api.firecrawl.dev/v1/scrape"
-    headers = {"Authorization": f"Bearer {api_key}"}
+    pages: list[str] = []
+    with pdfplumber.open(str(path)) as pdf:
+        for page_no, page in enumerate(pdf.pages, start=1):
+            # extract_text: 공백 허용 범위를 넓혀 붙어 있는 글자 분리
+            text = page.extract_text(x_tolerance=3, y_tolerance=3) or ""
+            # 표(table)도 별도 추출해서 이어 붙임
+            tables = page.extract_tables() or []
+            table_text = ""
+            for table in tables:
+                for row in table:
+                    if row:
+                        cleaned = [cell.strip() if cell else "" for cell in row]
+                        table_text += " | ".join(cleaned) + "\n"
+            combined = (text + ("\n" + table_text if table_text else "")).strip()
+            if combined:
+                pages.append(f"[p.{page_no}]\n{combined}")
 
-    with open(file_path, "rb") as f:
-        file_bytes = f.read()
-
-    # Firecrawl /parse accepts multipart/form-data with file upload
-    files = {"file": (file_path.name, file_bytes, "application/pdf")}
-    data = {"formats": "markdown"}
-
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(url, headers=headers, files=files, data=data)
-        resp.raise_for_status()
-        result = resp.json()
-
-    markdown = result.get("data", {}).get("markdown", "") or result.get("markdown", "")
-    if not markdown:
-        raise ValueError("Firecrawl에서 텍스트를 추출하지 못했습니다.")
-    return markdown
+    if not pages:
+        raise ValueError("PDF에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원되지 않습니다.")
+    return "\n\n".join(pages)
 
 
 class DocumentRagStore:
@@ -323,11 +332,8 @@ class DocumentRagStore:
         version: str = "",
         revision_date: str = "",
     ) -> dict:
-        firecrawl_key = os.getenv("FIRECRAWL_API_KEY", "").strip()
-        if not firecrawl_key:
-            raise ValueError("FIRECRAWL_API_KEY가 설정되지 않았습니다. 일반 PDF 파서를 사용하려면 /api/rag/upload를 사용하세요.")
-
-        parsed_text = await _firecrawl_parse(source_path, firecrawl_key)
+        """pdfplumber를 사용한 고급 PDF 파싱 (구 Firecrawl 엔드포인트와 동일한 시그니처 유지)."""
+        parsed_text = _read_pdf_advanced(source_path)
         return self.add_document(
             source_path,
             original_filename=original_filename,
