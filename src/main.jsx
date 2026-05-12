@@ -354,7 +354,11 @@ function SearchPage({ appState }) {
 
   useEffect(() => {
     const urlQ = (searchParams.get('q') || '').trim();
-    if (urlQ.length >= 2 && urlQ !== submitted) runSearch(urlQ);
+    // 초기 마운트 시 또는 URL이 바뀌었을 때 항상 다시 검색 실행 (PDF 뷰어에서 돌아온 경우 포함)
+    if (urlQ.length >= 2 && (aiState.status === 'idle' || urlQ !== submitted)) {
+      runSearch(urlQ);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   const hasSubmitted = submitted.length >= 2;
@@ -385,47 +389,31 @@ function SearchPage({ appState }) {
           {/* 1순위: AI 답변 */}
           <AiAnswerPanel state={aiState} appState={appState} />
 
-          {/* 2순위: 회사 표준지침 */}
+          {/* 2순위: 회사 표준지침 (JSON + 인덱싱된 PDF 통합) */}
           <SearchSection title="회사 표준지침" tag="내부 기준" priority={1}>
-            {companyResults.length === 0 ? (
+            {companyResults.length === 0 && ragState.items.length === 0 && ragState.status !== 'loading' ? (
               <div className="section-empty">
                 회사 표준지침에서 직접 관련 기준을 찾지 못했습니다.<br />
                 아래 KCSC 참고 기준을 확인할 수 있습니다.<br />
                 <small>현장 적용 전 담당자 검토가 필요합니다.</small>
               </div>
-            ) : companyResults.map((item) => (
-              <CompanyResultCard key={item.id} item={item} appState={appState} />
-            ))}
+            ) : (
+              <>
+                {companyResults.map((item) => (
+                  <CompanyResultCard key={item.id} item={item} appState={appState} />
+                ))}
+                {ragState.status === 'loading' && (
+                  <div className="loading-row"><span className="spinner" />표준 문서 검색 중...</div>
+                )}
+                {ragState.items.map((chunk) => (
+                  <RagChunkCard key={chunk.id} chunk={chunk} />
+                ))}
+              </>
+            )}
           </SearchSection>
 
-          {/* 3순위: 업로드된 문서 (RAG) */}
-          {(ragState.status === 'loading' || ragState.items.length > 0) && (
-            <SearchSection title="업로드된 표준 문서" tag="PDF 검색" priority={3}>
-              {ragState.status === 'loading' ? (
-                <div className="loading-row"><span className="spinner" />문서 검색 중...</div>
-              ) : ragState.items.map((chunk) => {
-                const pdfUrl = chunk.pdf_url ? apiUrl(chunk.pdf_url) : null;
-                const viewerLink = pdfUrl ? pdfViewerLink(pdfUrl, chunk.page_start, chunk.document_title) : null;
-                const location = [chunk.chapter, chunk.section, chunk.clause].filter(Boolean).join(' > ');
-                return (
-                  <div key={chunk.id} className="result-card">
-                    <div className="card-meta">
-                      <strong>{chunk.document_title}</strong>
-                      {chunk.page_start && <span>p.{chunk.page_start}</span>}
-                    </div>
-                    {location && <p className="ref-location">{location}</p>}
-                    <p className="summary">{(chunk.text || '').slice(0, 160)}…</p>
-                    {viewerLink && (
-                      <NavLink className="btn-pdf" to={viewerLink}>PDF 보기</NavLink>
-                    )}
-                  </div>
-                );
-              })}
-            </SearchSection>
-          )}
-
-          {/* 4순위: KCSC 참고 기준 */}
-          <SearchSection title="KCSC 참고 기준" tag="국가건설기준센터" priority={4} note="KCSC는 참고 기준입니다. 현장 적용은 회사 표준지침과 계약도서를 우선 확인하세요.">
+          {/* 3순위: KCSC 참고 기준 */}
+          <SearchSection title="KCSC 참고 기준" tag="국가건설기준센터" priority={2} note="KCSC는 참고 기준입니다. 현장 적용은 회사 표준지침과 계약도서를 우선 확인하세요.">
             {kcscState.status === 'loading' ? (
               <div className="loading-row"><span className="spinner" />검색 중...</div>
             ) : kcscState.status === 'error' ? (
@@ -488,6 +476,49 @@ function CompanyResultCard({ item, appState }) {
         <button className={isFav ? 'btn-fav active' : 'btn-fav'} onClick={() => toggleFavorite(item.id, appState)}>
           {isFav ? '★ 즐겨찾기' : '☆ 즐겨찾기'}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// 청크 텍스트에서 가장 의미있는 제목 후보 추출
+function extractChunkTitle(text) {
+  if (!text) return '';
+  const clean = text.replace(/\s+/g, ' ').trim();
+
+  // 1) 장/절/조 패턴 우선 (예: "03 옥내배관공사", "03-1 옥내 급수,급탕배관공사", "07-2 시공관련사항")
+  const sectionMatch = clean.match(/(\d{1,2}(?:[-.]\d{1,2}){0,2})\s+([가-힣A-Za-z][^[\d\n]{2,40})/);
+  if (sectionMatch) {
+    return `${sectionMatch[1]} ${sectionMatch[2].trim()}`.slice(0, 60);
+  }
+
+  // 2) [p.N] 마커 직후 첫 구절
+  const afterPage = clean.match(/\[p\.\d+\]\s*([^[\n]{4,60})/);
+  if (afterPage) return afterPage[1].trim().slice(0, 60);
+
+  // 3) fallback: 텍스트 첫 60자
+  return clean.slice(0, 60);
+}
+
+function RagChunkCard({ chunk }) {
+  const pdfUrl = chunk.pdf_url ? apiUrl(chunk.pdf_url) : null;
+  const viewerLink = pdfUrl ? pdfViewerLink(pdfUrl, chunk.page_start, chunk.document_title) : null;
+  const structured = [chunk.chapter, chunk.section, chunk.clause].filter(Boolean).join(' > ');
+  const cardTitle = structured || extractChunkTitle(chunk.text) || `청크 #${chunk.chunk_index}`;
+  const preview = (chunk.text || '').slice(0, 180);
+
+  return (
+    <div className="result-card company-card">
+      <div className="card-meta">
+        <span>PDF 표준</span>
+        {chunk.page_start && <span>p.{chunk.page_start}</span>}
+      </div>
+      <strong className="card-title">{cardTitle}</strong>
+      <p className="card-summary">{preview}…</p>
+      <div className="card-actions">
+        {viewerLink && (
+          <NavLink className="btn-pdf" to={viewerLink}>PDF 보기</NavLink>
+        )}
       </div>
     </div>
   );
