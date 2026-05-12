@@ -89,7 +89,13 @@ def _now() -> str:
 
 
 def _resolve_user(x_user_id: str | None) -> str:
-    user = (x_user_id or "").strip()
+    from urllib.parse import unquote
+    raw = (x_user_id or "").strip()
+    # 프론트엔드가 한글 등 비ASCII 문자를 URL 인코딩해서 보냄 → 디코드
+    try:
+        user = unquote(raw)
+    except Exception:
+        user = raw
     return user or "anonymous"
 
 

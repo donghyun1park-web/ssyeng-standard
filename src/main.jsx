@@ -110,7 +110,7 @@ async function fetchJson(path, options = {}) {
   }
   if (path.startsWith('/api/checklists')) {
     const userId = readUserId();
-    if (userId) options = { ...options, headers: { ...(options.headers || {}), 'X-User-Id': userId } };
+    if (userId) options = { ...options, headers: { ...(options.headers || {}), 'X-User-Id': encodeURIComponent(userId) } };
   }
   const response = await fetch(apiUrl(path), options);
   if (!response.ok) throw new Error(`API ${response.status}`);
