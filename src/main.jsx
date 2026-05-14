@@ -172,20 +172,47 @@ function toggleFavorite(id, appState) {
 function LoginPage({ onLogin }) {
   const [name, setName] = useState('');
   const [sabun, setSabun] = useState('');
+  const [siteName, setSiteName] = useState('');
+  const [sites, setSites] = useState([]);
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e) => {
+  // 앱 시작 시 현장 목록 로드
+  useEffect(() => {
+    fetch(apiUrl('/api/auth/sites'))
+      .then((r) => r.json())
+      .then((data) => setSites(data.sites || []))
+      .catch(() => setSites([]));
+  }, []);
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
     const trimName = name.trim();
     const trimSabun = sabun.trim();
-    if (!trimName || !trimSabun) {
-      setError('이름과 사번을 모두 입력해주세요.');
-      return;
+    if (!trimName || !trimSabun) { setError('이름과 사번을 모두 입력해주세요.'); return; }
+    if (!siteName) { setError('현장을 선택해주세요.'); return; }
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(apiUrl('/api/auth/login'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimName, sabun: trimSabun, site_name: siteName }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.detail || '이름 또는 사번이 올바르지 않습니다.');
+        return;
+      }
+      const { user } = await res.json();
+      saveUser(user, remember);
+      onLogin(user);
+    } catch {
+      setError('서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setLoading(false);
     }
-    const user = { name: trimName, sabun: trimSabun };
-    saveUser(user, remember);
-    onLogin(user);
   };
 
   return (
@@ -196,7 +223,7 @@ function LoginPage({ onLogin }) {
         <p className="login-subtitle">이름과 사번으로 시작하세요</p>
         <form onSubmit={handleSubmit} className="login-form">
           <div className="login-field">
-            <label className="field-label">이름</label>
+            <label className="field-label">이름 (ID)</label>
             <input
               type="text"
               value={name}
@@ -207,7 +234,7 @@ function LoginPage({ onLogin }) {
             />
           </div>
           <div className="login-field">
-            <label className="field-label">사번 (비밀번호)</label>
+            <label className="field-label">사번 (PASS)</label>
             <input
               type="password"
               value={sabun}
@@ -215,6 +242,19 @@ function LoginPage({ onLogin }) {
               placeholder="사번 입력"
               autoComplete="current-password"
             />
+          </div>
+          <div className="login-field">
+            <label className="field-label">현장 선택</label>
+            <select
+              value={siteName}
+              onChange={(e) => setSiteName(e.target.value)}
+              className="login-site-select"
+            >
+              <option value="">-- 현장을 선택하세요 --</option>
+              {sites.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
           </div>
           <label className="login-remember">
             <input
@@ -225,7 +265,9 @@ function LoginPage({ onLogin }) {
             <span>저장하기 (다음 방문 시 자동 로그인)</span>
           </label>
           {error && <p className="login-error">{error}</p>}
-          <button type="submit" className="btn-primary login-btn">시작하기</button>
+          <button type="submit" className="btn-primary login-btn" disabled={loading}>
+            {loading ? '확인 중...' : '시작하기'}
+          </button>
         </form>
       </div>
     </div>
@@ -1090,9 +1132,12 @@ function SiteIssueForm({ siteId, onSaved }) {
 const TRADE_LIST = ['배관공사', '보온공사', '덕트공사', '장비설치', '시험및검사'];
 const TRADE_ICONS = { '배관공사': '🔧', '보온공사': '🌡', '덕트공사': '💨', '장비설치': '⚙', '시험및검사': '🧪' };
 
-function useSelectedSite() {
+function useSelectedSite(loginSiteName) {
   const [siteId, setSiteId] = useState(() => {
-    try { return localStorage.getItem(STORAGE_KEYS.checklistSite) || ''; } catch { return ''; }
+    try {
+      // 로그인 시 선택한 현장을 우선 사용, 없으면 저장된 값
+      return localStorage.getItem(STORAGE_KEYS.checklistSite) || loginSiteName || '';
+    } catch { return loginSiteName || ''; }
   });
   const update = useCallback((next) => {
     setSiteId(next);
@@ -1109,7 +1154,8 @@ function ChecklistPage({ appState }) {
   const [checklists, setChecklists] = useState([]);
   const [loading, setLoading] = useState(true);
   const [sites, setSites] = useState([]);
-  const [siteId, setSiteId] = useSelectedSite();
+  const loginSiteName = appState.currentUser?.site_name || '';
+  const [siteId, setSiteId] = useSelectedSite(loginSiteName);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1124,7 +1170,17 @@ function ChecklistPage({ appState }) {
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    fetchJson('/api/sites').then((data) => setSites(data.sites || [])).catch(() => setSites([]));
+    // 마스터 현장 목록(auth)과 직접 등록 현장(site_issues) 모두 표시
+    Promise.all([
+      fetch(apiUrl('/api/auth/sites')).then((r) => r.json()).catch(() => ({ sites: [] })),
+      fetchJson('/api/sites').catch(() => ({ sites: [] })),
+    ]).then(([authData, siteData]) => {
+      const masterSites = (authData.sites || []).map((name) => ({ id: name, label: name }));
+      const extraSites = (siteData.sites || [])
+        .filter((s) => !masterSites.some((m) => m.id === s.site_name))
+        .map((s) => ({ id: s.id, label: s.site_name }));
+      setSites([...masterSites, ...extraSites]);
+    });
   }, []);
 
   return (
@@ -1135,19 +1191,19 @@ function ChecklistPage({ appState }) {
       </div>
       {appState.currentUser && (
         <p className="info-msg" style={{ margin: '0 0 8px' }}>
-          사용자: <strong>{appState.currentUser.name}</strong> (사번: {appState.currentUser.sabun})
+          <strong>{appState.currentUser.name}</strong> · 현장: <strong>{siteId || '미선택'}</strong>
         </p>
       )}
 
       <div className="settings-card">
         <label className="field-label">현장 선택</label>
         <select value={siteId} onChange={(e) => setSiteId(e.target.value)}>
-          <option value="">기본 (현장 미지정)</option>
+          <option value="">-- 현장을 선택하세요 --</option>
           {sites.map((s) => (
-            <option key={s.id} value={s.id}>{s.site_name}</option>
+            <option key={s.id} value={s.id}>{s.label}</option>
           ))}
         </select>
-        <p className="settings-note">항목과 체크 상태는 (사용자, 현장, 공종) 단위로 분리 저장됩니다.</p>
+        <p className="settings-note">같은 현장을 선택한 인원이 체크리스트를 공유합니다.</p>
       </div>
 
       {loading ? (

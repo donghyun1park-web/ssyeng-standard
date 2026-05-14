@@ -1524,3 +1524,7 @@ a.card-title:hover { color: var(--brand-2); text-decoration: underline; }
 .user-info-text { display: flex; flex-direction: column; gap: 2px; }
 .user-info-text strong { font-size: 16px; color: var(--text-primary, #1a202c); }
 .user-info-text small { font-size: 13px; color: var(--text-secondary, #718096); }
+
+/* ── Login site select ───────────────────────────────────────────────────── */
+.login-site-select { width: 100%; padding: 10px 14px; border: 1px solid var(--border, #e2e8f0); border-radius: 8px; font-size: 15px; background: var(--input-bg, #f7fafc); outline: none; appearance: auto; cursor: pointer; transition: border-color 0.15s; }
+.login-site-select:focus { border-color: var(--accent, #667eea); background: #fff; }
