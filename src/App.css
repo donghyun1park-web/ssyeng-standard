@@ -1502,3 +1502,25 @@ a.card-title:hover { color: var(--brand-2); text-decoration: underline; }
 .pdf-page-input { width: 56px; padding: 4px 6px; text-align: center; border-radius: 6px; border: 1px solid #555; background: #1e1e1e; color: #fff; }
 .pdf-page-total { color: #bbb; font-size: 13px; }
 .pdf-zoom-controls { display: inline-flex; gap: 4px; margin-left: 6px; padding-left: 8px; border-left: 1px solid #444; }
+
+/* ── Login Page ──────────────────────────────────────────────────────────── */
+.login-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; background: var(--bg-page, #f0f4f8); }
+.login-card { width: 100%; max-width: 380px; background: var(--card-bg, #fff); border: 1px solid var(--border, #e2e8f0); border-radius: 16px; padding: 36px 28px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+.login-logo { font-size: 40px; text-align: center; margin-bottom: 12px; }
+.login-title { font-size: 22px; font-weight: 700; text-align: center; margin: 0 0 6px; color: var(--text-primary, #1a202c); }
+.login-subtitle { font-size: 14px; color: var(--text-secondary, #718096); text-align: center; margin: 0 0 28px; }
+.login-form { display: flex; flex-direction: column; gap: 16px; }
+.login-field { display: flex; flex-direction: column; gap: 6px; }
+.login-field input { padding: 10px 14px; border: 1px solid var(--border, #e2e8f0); border-radius: 8px; font-size: 15px; background: var(--input-bg, #f7fafc); outline: none; transition: border-color 0.15s; }
+.login-field input:focus { border-color: var(--accent, #667eea); background: #fff; }
+.login-remember { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-secondary, #718096); cursor: pointer; }
+.login-remember input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
+.login-error { font-size: 13px; color: var(--danger, #e53e3e); margin: -4px 0 0; padding: 8px 12px; background: #fff5f5; border-radius: 6px; }
+.login-btn { margin-top: 4px; padding: 12px; font-size: 16px; font-weight: 600; border-radius: 10px; }
+
+/* ── User Info (Settings) ────────────────────────────────────────────────── */
+.user-info-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+.user-info-avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--accent, #667eea); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; flex-shrink: 0; }
+.user-info-text { display: flex; flex-direction: column; gap: 2px; }
+.user-info-text strong { font-size: 16px; color: var(--text-primary, #1a202c); }
+.user-info-text small { font-size: 13px; color: var(--text-secondary, #718096); }

@@ -132,24 +132,24 @@ def _save_records(data: dict) -> None:
     RECORDS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _user_site_items(user_id: str, site_id: str, trade: str | None = None) -> list[dict]:
+def _site_items(site_id: str, trade: str | None = None) -> list[dict]:
+    """현장(site_id) 기준으로 체크리스트 항목 조회 — 같은 현장 인원이 공유."""
     items = _load_items().get("items", [])
     result = [
         it for it in items
-        if it.get("user_id") == user_id
-        and it.get("site_id") == site_id
+        if it.get("site_id") == site_id
         and (trade is None or it.get("trade") == trade)
     ]
     result.sort(key=lambda it: (it.get("sort_order", 0), it.get("created_at", "")))
     return result
 
 
-def _user_site_records(user_id: str, site_id: str, trade: str | None = None) -> list[dict]:
+def _site_records(site_id: str, trade: str | None = None) -> list[dict]:
+    """현장(site_id) 기준으로 체크 기록 조회 — 같은 현장 인원이 공유."""
     records = _load_records().get("records", [])
     return [
         r for r in records
-        if r.get("user_id", "anonymous") == user_id
-        and r.get("site_id", "default") == site_id
+        if r.get("site_id", "default") == site_id
         and (trade is None or r.get("trade") == trade)
     ]
 
@@ -170,8 +170,8 @@ def list_checklists(
     sid = _resolve_site(site_id)
     result = []
     for trade in TRADE_LIST:
-        items = _user_site_items(user_id, sid, trade)
-        records = _user_site_records(user_id, sid, trade)
+        items = _site_items(sid, trade)
+        records = _site_records(sid, trade)
         checked_count = sum(1 for r in records if r.get("status") in ("적합", "해당없음"))
         result.append({
             "trade": trade,
@@ -192,8 +192,8 @@ def get_checklist(
         raise HTTPException(status_code=404, detail="공종을 찾을 수 없습니다.")
     user_id = _resolve_user(x_user_id)
     sid = _resolve_site(site_id)
-    items = _user_site_items(user_id, sid, trade)
-    records_list = _user_site_records(user_id, sid, trade)
+    items = _site_items(sid, trade)
+    records_list = _site_records(sid, trade)
     records_by_item = {r["item_id"]: r for r in records_list if "item_id" in r}
     template_available = len(items) == 0 and trade in DEFAULT_TEMPLATES
     return {
@@ -225,11 +225,11 @@ def create_item(
     sid = _resolve_site(body.site_id)
     data = _load_items()
     items = data.setdefault("items", [])
-    existing = [it for it in items if it.get("user_id") == user_id and it.get("site_id") == sid and it.get("trade") == body.trade]
+    existing = _site_items(sid, body.trade)
     next_order = max([it.get("sort_order", 0) for it in existing], default=-1) + 1
     item = {
         "id": f"item-{uuid.uuid4().hex[:10]}",
-        "user_id": user_id,
+        "created_by": user_id,   # 생성자 기록 (참고용)
         "site_id": sid,
         "trade": body.trade,
         "text": body.text.strip(),
@@ -255,14 +255,12 @@ def update_item(
     body: ItemUpdate,
     x_user_id: str = Header(default="", alias="X-User-Id"),
 ):
-    user_id = _resolve_user(x_user_id)
     data = _load_items()
     items = data.get("items", [])
     item = next((it for it in items if it.get("id") == item_id), None)
     if not item:
         raise HTTPException(status_code=404, detail="항목을 찾을 수 없습니다.")
-    if item.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="본인이 만든 항목만 수정할 수 있습니다.")
+    # 현장 공유 모드: 같은 현장 인원이면 누구나 수정 가능
     if body.text is not None:
         text = body.text.strip()
         if not text:
@@ -282,14 +280,12 @@ def delete_item(
     item_id: str,
     x_user_id: str = Header(default="", alias="X-User-Id"),
 ):
-    user_id = _resolve_user(x_user_id)
     data = _load_items()
     items = data.get("items", [])
     item = next((it for it in items if it.get("id") == item_id), None)
     if not item:
         raise HTTPException(status_code=404, detail="항목을 찾을 수 없습니다.")
-    if item.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="본인이 만든 항목만 삭제할 수 있습니다.")
+    # 현장 공유 모드: 같은 현장 인원이면 누구나 삭제 가능
     data["items"] = [it for it in items if it.get("id") != item_id]
     _save_items(data)
 
@@ -316,14 +312,14 @@ def load_template(
     sid = _resolve_site(body.site_id)
     data = _load_items()
     items = data.setdefault("items", [])
-    existing = [it for it in items if it.get("user_id") == user_id and it.get("site_id") == sid and it.get("trade") == body.trade]
+    existing = _site_items(sid, body.trade)
     if existing:
         raise HTTPException(status_code=409, detail="이미 항목이 존재합니다. 빈 상태에서만 템플릿을 불러올 수 있습니다.")
     created = []
     for idx, tpl in enumerate(DEFAULT_TEMPLATES[body.trade]):
         new_item = {
             "id": f"item-{uuid.uuid4().hex[:10]}",
-            "user_id": user_id,
+            "created_by": user_id,   # 템플릿 불러온 사람 기록
             "site_id": sid,
             "trade": body.trade,
             "text": tpl["text"],
@@ -356,16 +352,17 @@ def upsert_check_record(
     user_id = _resolve_user(x_user_id)
     sid = _resolve_site(body.site_id)
 
+    # 현장 공유 모드: 해당 site의 항목인지만 확인 (user_id 무관)
     items = _load_items().get("items", [])
-    if not any(it.get("id") == body.item_id and it.get("user_id") == user_id and it.get("site_id") == sid for it in items):
+    if not any(it.get("id") == body.item_id and it.get("site_id") == sid for it in items):
         raise HTTPException(status_code=400, detail="유효하지 않은 항목 ID입니다.")
 
     data = _load_records()
     records = data.setdefault("records", [])
+    # 체크 기록은 item_id + site_id 기준으로 upsert (현장 공유)
     existing = next(
         (r for r in records
-         if r.get("user_id", "anonymous") == user_id
-         and r.get("trade") == body.trade
+         if r.get("trade") == body.trade
          and r.get("item_id") == body.item_id
          and r.get("site_id", "default") == sid),
         None
@@ -373,12 +370,13 @@ def upsert_check_record(
     if existing:
         existing["status"] = body.status
         existing["memo"] = body.memo
+        existing["checked_by"] = user_id   # 마지막으로 체크한 사람
         existing["updated_at"] = _now()
         record = existing
     else:
         record = {
             "id": f"rec-{uuid.uuid4().hex[:10]}",
-            "user_id": user_id,
+            "checked_by": user_id,   # 체크한 사람 기록
             "trade": body.trade,
             "item_id": body.item_id,
             "site_id": sid,
@@ -397,14 +395,12 @@ def delete_check_record(
     record_id: str,
     x_user_id: str = Header(default="", alias="X-User-Id"),
 ):
-    user_id = _resolve_user(x_user_id)
     data = _load_records()
     records = data.get("records", [])
     target = next((r for r in records if r.get("id") == record_id), None)
     if not target:
         raise HTTPException(status_code=404, detail="레코드를 찾을 수 없습니다.")
-    if target.get("user_id", "anonymous") != user_id:
-        raise HTTPException(status_code=403, detail="본인 기록만 삭제할 수 있습니다.")
+    # 현장 공유 모드: 같은 현장 인원이면 누구나 삭제 가능
     data["records"] = [r for r in records if r.get("id") != record_id]
     _save_records(data)
     return {"ok": True}

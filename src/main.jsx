@@ -20,6 +20,7 @@ const STORAGE_KEYS = {
   adminToken: 'facility-standard:admin-token',
   userId: 'facility-standard:user-id',
   checklistSite: 'facility-standard:checklist-site',
+  user: 'facility-standard:user', // { name, sabun }
 };
 
 const LAW_URL = 'https://www.law.go.kr/ais/main.do';
@@ -32,7 +33,33 @@ function readUserGeminiKey() {
 function readAdminToken() {
   try { return (localStorage.getItem(STORAGE_KEYS.adminToken) || '').trim(); } catch { return ''; }
 }
+function readUser() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.user) || sessionStorage.getItem(STORAGE_KEYS.user) || '';
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function saveUser(user, remember) {
+  try {
+    const val = JSON.stringify(user);
+    if (remember) {
+      localStorage.setItem(STORAGE_KEYS.user, val);
+      sessionStorage.removeItem(STORAGE_KEYS.user);
+    } else {
+      sessionStorage.setItem(STORAGE_KEYS.user, val);
+      localStorage.removeItem(STORAGE_KEYS.user);
+    }
+  } catch {}
+}
+function clearUser() {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.user);
+    sessionStorage.removeItem(STORAGE_KEYS.user);
+  } catch {}
+}
 function readUserId() {
+  const user = readUser();
+  if (user && user.sabun) return user.sabun.trim();
   try { return (localStorage.getItem(STORAGE_KEYS.userId) || '').trim(); } catch { return ''; }
 }
 function readStorage(key, fallback) {
@@ -140,7 +167,73 @@ function toggleFavorite(id, appState) {
   );
 }
 
+// ── Login Page ────────────────────────────────────────────────────────────────
+
+function LoginPage({ onLogin }) {
+  const [name, setName] = useState('');
+  const [sabun, setSabun] = useState('');
+  const [remember, setRemember] = useState(true);
+  const [error, setError] = useState('');
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const trimName = name.trim();
+    const trimSabun = sabun.trim();
+    if (!trimName || !trimSabun) {
+      setError('이름과 사번을 모두 입력해주세요.');
+      return;
+    }
+    const user = { name: trimName, sabun: trimSabun };
+    saveUser(user, remember);
+    onLogin(user);
+  };
+
+  return (
+    <div className="login-page">
+      <div className="login-card">
+        <div className="login-logo">⚙</div>
+        <h1 className="login-title">설비 시공표준</h1>
+        <p className="login-subtitle">이름과 사번으로 시작하세요</p>
+        <form onSubmit={handleSubmit} className="login-form">
+          <div className="login-field">
+            <label className="field-label">이름</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="예: 홍길동"
+              autoFocus
+              autoComplete="name"
+            />
+          </div>
+          <div className="login-field">
+            <label className="field-label">사번 (비밀번호)</label>
+            <input
+              type="password"
+              value={sabun}
+              onChange={(e) => setSabun(e.target.value)}
+              placeholder="사번 입력"
+              autoComplete="current-password"
+            />
+          </div>
+          <label className="login-remember">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(e) => setRemember(e.target.checked)}
+            />
+            <span>저장하기 (다음 방문 시 자동 로그인)</span>
+          </label>
+          {error && <p className="login-error">{error}</p>}
+          <button type="submit" className="btn-primary login-btn">시작하기</button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function App() {
+  const [currentUser, setCurrentUser] = useState(() => readUser());
   const [favorites, setFavorites] = useStoredState(STORAGE_KEYS.favorites, []);
   const [recent, setRecent] = useStoredState(STORAGE_KEYS.recent, []);
   const [checked, setChecked] = useStoredState(STORAGE_KEYS.checklist, {});
@@ -151,11 +244,21 @@ function App() {
   const swNotice = useServiceWorkerNotice();
   const { items, apiStatus, refreshItems } = useStandardItems();
 
+  const handleLogout = () => {
+    clearUser();
+    setCurrentUser(null);
+  };
+
   const appState = {
     favorites, setFavorites, recent, setRecent,
     checked, setChecked, settings, setSettings,
     items, apiStatus, refreshItems, networkOnline, swNotice,
+    currentUser, handleLogout,
   };
+
+  if (!currentUser) {
+    return <LoginPage onLogin={(user) => setCurrentUser(user)} />;
+  }
 
   return (
     <BrowserRouter>
@@ -1007,8 +1110,6 @@ function ChecklistPage({ appState }) {
   const [loading, setLoading] = useState(true);
   const [sites, setSites] = useState([]);
   const [siteId, setSiteId] = useSelectedSite();
-  const [userId, setUserIdLocal] = useState(() => readUserId());
-  const [draftUser, setDraftUser] = useState(userId);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1026,32 +1127,17 @@ function ChecklistPage({ appState }) {
     fetchJson('/api/sites').then((data) => setSites(data.sites || [])).catch(() => setSites([]));
   }, []);
 
-  const saveUser = () => {
-    const clean = draftUser.trim();
-    try {
-      if (clean) localStorage.setItem(STORAGE_KEYS.userId, clean);
-      else localStorage.removeItem(STORAGE_KEYS.userId);
-    } catch {}
-    setUserIdLocal(clean);
-    load();
-  };
-
   return (
     <section className="stack">
       <div className="page-header">
         <h2>체크리스트</h2>
-        <span className="page-subtitle">공종별 · 현장별 · 사용자별 점검</span>
+        <span className="page-subtitle">공종별 · 현장별 점검 (현장 인원 공유)</span>
       </div>
-
-      <div className="settings-card">
-        <label className="field-label">사용자 이름 (개인화 식별자)</label>
-        <div className="search-row">
-          <input value={draftUser} onChange={(e) => setDraftUser(e.target.value)} placeholder="예: 홍길동 / 사번" />
-          <button type="button" onClick={saveUser}>저장</button>
-        </div>
-        {!userId && <p className="settings-note">이름을 저장하지 않으면 공용 영역(anonymous)으로 저장됩니다.</p>}
-        {userId && <p className="info-msg">사용 중: {userId}</p>}
-      </div>
+      {appState.currentUser && (
+        <p className="info-msg" style={{ margin: '0 0 8px' }}>
+          사용자: <strong>{appState.currentUser.name}</strong> (사번: {appState.currentUser.sabun})
+        </p>
+      )}
 
       <div className="settings-card">
         <label className="field-label">현장 선택</label>
@@ -1374,6 +1460,23 @@ function SettingsPage({ appState }) {
         <h2>설정</h2>
       </div>
 
+      {/* 사용자 정보 */}
+      <div className="settings-card">
+        <h3>사용자 정보</h3>
+        {appState.currentUser && (
+          <div className="user-info-row">
+            <div className="user-info-avatar">{appState.currentUser.name.slice(0, 1)}</div>
+            <div className="user-info-text">
+              <strong>{appState.currentUser.name}</strong>
+              <small>사번: {appState.currentUser.sabun}</small>
+            </div>
+          </div>
+        )}
+        <button className="btn-outline" style={{ marginTop: 12 }} onClick={() => {
+          if (window.confirm('로그아웃 하시겠습니까?')) appState.handleLogout();
+        }}>로그아웃</button>
+      </div>
+
       <GeminiKeyCard />
       <AdminTokenCard />
 
@@ -1405,14 +1508,6 @@ function SettingsPage({ appState }) {
             location.reload();
           }
         }}>로컬 저장 데이터 초기화</button>
-      </div>
-
-      <div className="settings-card">
-        <h3>법령 검색</h3>
-        <a className="btn-outline block" href={LAW_URL} target="_blank" rel="noreferrer">
-          법제처 AI 법령검색 바로가기 ↗
-        </a>
-        <p className="settings-note">법령검색 결과는 참고용입니다. 현장 적용 전 회사 표준지침, 설계도서, 계약서, 감리 지시사항과 함께 확인하세요.</p>
       </div>
     </section>
   );
