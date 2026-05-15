@@ -14,5 +14,9 @@ services:
         sync: false           # Render 대시보드에서 강력한 랜덤 값으로 입력
       - key: GEMINI_API_KEY
         sync: false           # Google AI Studio 키 (선택; 없으면 로컬 fallback)
+      - key: KCSC_API_KEY
+        sync: false
+      - key: KCSC_FETCH_VIEWER_ON_SEARCH
+        value: "false"
       - key: CORS_ALLOW_ORIGINS
         value: "*"            # 사내 단일 서비스이므로 와일드카드 OK
