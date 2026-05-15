@@ -5,6 +5,8 @@ backend/reports/
 backend/backups/
 backend/data/documents/
 backend/data/rag_index.json
+# preload 폴더는 추적 (회사 표준 PDF 사전 탑재용)
+!backend/data/preload/
 backend/data/rag_index.backup-*.json
 backend/data/migration_batches/
 backend/data/migration_staging/
