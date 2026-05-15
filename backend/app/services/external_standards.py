@@ -583,7 +583,7 @@ class ExternalStandardsAdapter:
 
     @classmethod
     def _kcsc_search_url(cls, query: str) -> str:
-        return f"https://www.kcsc.re.kr/standardCode/search?searchType=0&searchCnd=all&searchWrd={quote(str(query or ''), safe='')}"
+        return f"https://www.kcsc.re.kr/standardCode/search?kcsc_cd={quote(str(query or ''), safe='')}"
 
     @classmethod
     def _kcsc_result_url(cls, item: dict[str, Any], query: str) -> str:

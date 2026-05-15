@@ -75,6 +75,8 @@ class ExternalStandardsAdapterKcscTest(unittest.TestCase):
 
         self.assertEqual(len(result), 1)
         self.assertIn("kcsc.re.kr/standardCode/search", result[0]["source_url"])
+        self.assertIn("kcsc_cd=KCS%2031%2020%2015", result[0]["source_url"])
+        self.assertNotIn("searchWrd=", result[0]["source_url"])
         self.assertNotIn("/Viewer/", result[0]["source_url"])
 
 
