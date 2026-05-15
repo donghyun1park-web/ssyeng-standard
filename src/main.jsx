@@ -256,6 +256,7 @@ function LoginPage({ onLogin }) {
 
   return (
     <div className="login-page">
+      <BrandStrip />
       <div className="login-card">
         <div className="login-logo">
           <div className="logo-icon"><IcoWrench size={28} /></div>
@@ -365,6 +366,7 @@ function App() {
   return (
     <BrowserRouter>
       <div className={['app', settings.compactMode ? 'compact' : '', settings.largeTouch ? 'large-touch' : ''].filter(Boolean).join(' ')}>
+        <BrandStrip />
         <SwNotice appState={appState} />
         {popupNotice && <NoticePopup notice={popupNotice} onClose={dismissPopup} />}
         <main className="page-shell">
@@ -390,6 +392,28 @@ function App() {
 }
 
 // ── Bottom Navigation ─────────────────────────────────────────────────────────
+
+function BrandStrip() {
+  return (
+    <header className="brand-strip" aria-label="Ssangyong E&C MEP standard brand">
+      <div className="brand-strip-logo">
+        <img src="/brand/ssangyong-ci-en.jpg" alt="SSANGYONG" />
+        <span>MEP-STD</span>
+      </div>
+      <div className="brand-cert" aria-label="GLOBAL SAE-A certified">
+        <span className="brand-cert-mark" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
+        <span className="brand-cert-text">
+          <strong>GLOBAL SAE-A</strong>
+          <small>CERTIFIED MODULE</small>
+        </span>
+      </div>
+    </header>
+  );
+}
 
 function BottomNav() {
   const tabs = [

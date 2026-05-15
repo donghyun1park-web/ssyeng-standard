@@ -1,7 +1,7 @@
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 try:
     from pypdf import PdfReader
@@ -23,22 +23,32 @@ _GENERIC_TITLE_WORDS = {
 }
 
 class StandardRepository:
+    _shared_cache: ClassVar[dict[tuple[str, str], tuple[tuple[float, float], list[dict[str, Any]]]]] = {}
+
     def __init__(self, data_path: Path = DATA_PATH, rag_index_path: Path = RAG_INDEX_PATH):
         self.data_path = data_path
         self.rag_index_path = rag_index_path
-        self._mtime = (0.0, 0.0)
+        self._cache_key = (str(self.data_path.resolve()), str(self.rag_index_path.resolve()))
+        self._mtime = (-1.0, -1.0)
         self._items = []
-        self.reload_if_changed(force=True)
 
     def reload_if_changed(self, force: bool = False) -> None:
         mtime = (
             self.data_path.stat().st_mtime if self.data_path.exists() else 0.0,
             self.rag_index_path.stat().st_mtime if self.rag_index_path.exists() else 0.0,
         )
+        if not force:
+            cached = self._shared_cache.get(self._cache_key)
+            if cached and cached[0] == mtime:
+                self._mtime = mtime
+                self._items = cached[1]
+                return
+
         if force or mtime != self._mtime:
             rag_items = self._load_rag_items()
             self._items = rag_items if rag_items else self._load_items()
             self._mtime = mtime
+            self._shared_cache[self._cache_key] = (mtime, self._items)
 
     def _load_items(self) -> list[dict[str, Any]]:
         with self.data_path.open("r", encoding="utf-8") as f:
