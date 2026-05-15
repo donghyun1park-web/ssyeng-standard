@@ -400,17 +400,6 @@ function BrandStrip() {
         <img src="/brand/ssangyong-ci-en.jpg" alt="SSANGYONG" />
         <span>MEP-STD</span>
       </div>
-      <div className="brand-cert" aria-label="GLOBAL SAE-A certified">
-        <span className="brand-cert-mark" aria-hidden="true">
-          <i />
-          <i />
-          <i />
-        </span>
-        <span className="brand-cert-text">
-          <strong>GLOBAL SAE-A</strong>
-          <small>CERTIFIED MODULE</small>
-        </span>
-      </div>
     </header>
   );
 }
