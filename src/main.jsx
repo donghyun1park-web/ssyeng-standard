@@ -10,6 +10,44 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 const updateSW = () => {};
 
+// ── Lucide SVG Icons ──────────────────────────────────────────────────────────
+const I = ({ children, size = 20, color = 'currentColor', strokeWidth = 2 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+    stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round"
+    style={{ display: 'block', flexShrink: 0 }}>{children}</svg>
+);
+const IcoHome        = (p) => <I {...p}><path d="M3 11l9-8 9 8M5 10v10h14V10"/></I>;
+const IcoSearch      = (p) => <I {...p}><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></I>;
+const IcoClipboard   = (p) => <I {...p}><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a1 1 0 0 1 1 1v15a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h2"/><path d="M9 12h6M9 16h6M9 8h6"/></I>;
+const IcoBell        = (p) => <I {...p}><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M11 21h2"/></I>;
+const IcoSettings    = (p) => <I {...p}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.06.06a2 2 0 1 1-2.82 2.82l-.06-.06a1.7 1.7 0 0 0-1.82-.33 1.7 1.7 0 0 0-1 1.51V20a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.11-1.51 1.7 1.7 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.82-2.82l.06-.06a1.7 1.7 0 0 0 .33-1.82 1.7 1.7 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.82-2.82l.06.06a1.7 1.7 0 0 0 1.82.33H9a1.7 1.7 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.51 1.7 1.7 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.82 2.82l-.06.06a1.7 1.7 0 0 0-.33 1.82V9a1.7 1.7 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.51 1z"/></I>;
+const IcoFileSearch  = (p) => <I {...p}><path d="M14 3v5h5"/><path d="M14 3l7 7v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><circle cx="11.5" cy="14.5" r="2.5"/><path d="m13.3 16.3 1.7 1.7"/></I>;
+const IcoCheckSquare = (p) => <I {...p}><rect x="3" y="5" width="18" height="16" rx="2"/><path d="m8 12 3 3 5-5"/></I>;
+const IcoClipboard2  = (p) => <I {...p}><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></I>;
+const IcoSparkles    = (p) => <I {...p}><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 3v4M21 5h-4M5 17v4M7 19H3"/></I>;
+const IcoExtLink     = (p) => <I {...p}><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></I>;
+const IcoPaperclip   = (p) => <I {...p}><path d="m21 9-9 9a5 5 0 0 1-7-7l9-9a3 3 0 0 1 4 4l-9 9a1 1 0 0 1-2-2l8-8"/></I>;
+const IcoArrowLeft   = (p) => <I {...p}><path d="M19 12H5M12 19l-7-7 7-7"/></I>;
+const IcoChevronDown = (p) => <I {...p}><path d="m6 9 6 6 6-6"/></I>;
+const IcoX           = (p) => <I {...p}><path d="M18 6 6 18M6 6l12 12"/></I>;
+const IcoWrench      = (p) => <I {...p}><path d="M14.7 6.3a4 4 0 1 1 5 5l-11 11-3-3 1.5-1.5L4 14.2A4 4 0 0 1 9 9z"/></I>;
+const IcoBranch      = (p) => <I {...p}><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="9" r="2"/><path d="M6 8v8M16 9H10a4 4 0 0 0-4 4v3"/></I>;
+const IcoThermo      = (p) => <I {...p}><path d="M14 4a2 2 0 0 0-4 0v10.5a4 4 0 1 0 4 0z"/></I>;
+const IcoWind        = (p) => <I {...p}><path d="M9.5 8a3.5 3.5 0 1 1 0 8H2"/><path d="M11.5 16a3.5 3.5 0 1 0 0-8H2"/><path d="M21 12a4 4 0 1 0-8 0H2"/></I>;
+const IcoCog         = (p) => <I {...p}><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M22 12h-3M5 12H2M19 19l-2-2M7 7 5 5M19 5l-2 2M5 19l2-2"/></I>;
+const IcoFlask       = (p) => <I {...p}><path d="M10 2v7L4.2 19.4A2 2 0 0 0 6 22h12a2 2 0 0 0 1.8-2.6L14 9V2"/><path d="M8 2h8M7 16h10"/></I>;
+const IcoPlus        = (p) => <I {...p}><path d="M12 5v14M5 12h14"/></I>;
+const IcoPencil      = (p) => <I {...p}><path d="M14.7 6.3a2 2 0 0 1 0 2.8l-7 7-3.7 1 1-3.7 7-7a2 2 0 0 1 2.8 0z"/><path d="m13 7 4 4"/></I>;
+const IcoTrash       = (p) => <I {...p}><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></I>;
+
+const TRADE_ICONS_SVG = {
+  '배관공사':  IcoBranch,
+  '보온공사':  IcoThermo,
+  '덕트공사':  IcoWind,
+  '장비설치':  IcoCog,
+  '시험및검사': IcoFlask,
+};
+
 const STORAGE_KEYS = {
   favorites: 'facility-standard:favorites',
   recent: 'facility-standard:recent',
@@ -219,9 +257,11 @@ function LoginPage({ onLogin }) {
   return (
     <div className="login-page">
       <div className="login-card">
-        <div className="login-logo">⚙</div>
-        <h1 className="login-title">설비 시공표준</h1>
-        <p className="login-subtitle">이름과 사번으로 시작하세요</p>
+        <div className="login-logo">
+          <div className="logo-icon"><IcoWrench size={28} /></div>
+          <h1>설비 시공표준</h1>
+          <div className="sub">이름과 사번으로 시작하세요</div>
+        </div>
         <form onSubmit={handleSubmit} className="login-form">
           <div className="login-field">
             <label className="field-label">이름 (ID)</label>
@@ -352,18 +392,18 @@ function App() {
 // ── Bottom Navigation ─────────────────────────────────────────────────────────
 
 function BottomNav() {
-  const links = [
-    ['/', '홈', '⌂'],
-    ['/search', '검색', '⌕'],
-    ['/sites', '현장이슈', '📋'],
-    ['/notices', '공지사항', '📢'],
-    ['/settings', '설정', '⚙'],
+  const tabs = [
+    { to: '/',         label: '홈',       Icon: IcoHome },
+    { to: '/search',   label: '검색',     Icon: IcoSearch },
+    { to: '/sites',    label: '현장이슈', Icon: IcoClipboard },
+    { to: '/notices',  label: '공지사항', Icon: IcoBell },
+    { to: '/settings', label: '설정',     Icon: IcoSettings },
   ];
   return (
     <nav className="bottom-nav">
-      {links.map(([to, label, icon]) => (
+      {tabs.map(({ to, label, Icon }) => (
         <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => isActive ? 'active' : ''}>
-          <span>{icon}</span>
+          <Icon size={22} />
           <small>{label}</small>
         </NavLink>
       ))}
@@ -399,62 +439,46 @@ function SwNotice({ appState }) {
 
 function HomePage({ appState }) {
   const navigate = useNavigate();
+  const tiles = [
+    { to: '/search',    Icon: IcoFileSearch,  title: '표준지침 검색',  desc: 'AI 답변 + 문서 검색' },
+    { to: '/sites',     Icon: IcoClipboard2,  title: '현장이슈 공유',  desc: '현장별 도면검토 · 이슈' },
+    { to: '/checklist', Icon: IcoCheckSquare, title: '체크리스트',     desc: '공종별 현장 점검' },
+    { to: '/notices',   Icon: IcoBell,        title: '공지사항',       desc: '회사 · 현장 공지' },
+  ];
   return (
-    <section className="stack home-page">
-      <div className="home-header">
-        <p className="eyebrow">기계설비 시공표준 검색</p>
-        <h1>설비 시공표준 검색</h1>
+    <section className="page-shell">
+      <div className="home-greet">
+        {appState.currentUser ? `안녕하세요, ${appState.currentUser.name}님` : '안녕하세요'}
+      </div>
+      <div className="home-title">설비 시공표준</div>
+
+      <div className="home-grid">
+        {tiles.map(({ to, Icon, title, desc }) => (
+          <NavLink key={to} className="home-tile" to={to}>
+            <div className="tile-icon"><Icon size={26} /></div>
+            <div className="tile-title">{title}</div>
+            <div className="tile-desc">{desc}</div>
+          </NavLink>
+        ))}
       </div>
 
-      <form className="home-search-form" onSubmit={(e) => {
-        e.preventDefault();
-        const q = e.target.elements.q.value.trim();
-        if (q.length >= 2) navigate(`/search?q=${encodeURIComponent(q)}`);
-      }}>
-        <div className="home-search-row">
-          <input name="q" placeholder="배관 지지 기준 검색" autoComplete="off" />
-          <button type="submit">검색</button>
-        </div>
-      </form>
-
-      <div className="home-card-grid">
-        <NavLink className="home-card primary-card" to="/search">
-          <span className="home-card-icon">⌕</span>
-          <strong>회사 표준지침 검색</strong>
-          <span>AI 기반 근거 검색</span>
-        </NavLink>
-        <NavLink className="home-card" to="/sites">
-          <span className="home-card-icon">📋</span>
-          <strong>현장이슈 공유</strong>
-          <span>현장별 도면검토·이슈</span>
-        </NavLink>
-        <NavLink className="home-card" to="/checklist">
-          <span className="home-card-icon">☑</span>
-          <strong>체크리스트</strong>
-          <span>공종별 현장 점검</span>
-        </NavLink>
-        <NavLink className="home-card" to="/notices">
-          <span className="home-card-icon">📢</span>
-          <strong>공지사항</strong>
-          <span>회사·현장 공지</span>
-        </NavLink>
-      </div>
-
-      <a className="law-link-card" href={LAW_URL} target="_blank" rel="noreferrer">
+      <a className="law-card" href={LAW_URL} target="_blank" rel="noreferrer">
         <div>
-          <strong>법제처 AI 법령검색 바로가기</strong>
-          <span>법령은 공식 사이트에서 확인</span>
+          <div className="law-title">법제처 AI 법령검색</div>
+          <div className="law-sub">법령은 공식 사이트에서 확인</div>
         </div>
-        <span className="ext-icon">↗</span>
+        <IcoExtLink size={16} />
       </a>
 
-      <div className="home-section-title">자주 찾는 항목</div>
-      <div className="quick-chips">
-        {QUICK_TERMS.map((term) => (
-          <button key={term} className="chip" onClick={() => navigate(`/search?q=${encodeURIComponent(term)}`)}>
-            {term}
-          </button>
-        ))}
+      <div style={{ marginTop: 22 }}>
+        <div className="eyebrow" style={{ marginBottom: 10 }}>자주 찾는 항목</div>
+        <div className="quick-chips">
+          {QUICK_TERMS.map((term) => (
+            <button key={term} className="chip" onClick={() => navigate(`/search?q=${encodeURIComponent(term)}`)}>
+              {term}
+            </button>
+          ))}
+        </div>
       </div>
 
       {!appState.networkOnline && (
@@ -763,6 +787,7 @@ function AiAnswerPanel({ state, appState }) {
   return (
     <details className="ai-panel" open>
       <summary className="ai-panel-head">
+        <IcoSparkles size={16} />
         <span className="section-priority ai-badge">AI</span>
         <strong>AI 답변</strong>
         <span className="section-tag">근거 기반 답변</span>
@@ -1271,17 +1296,22 @@ function ChecklistPage({ appState }) {
         const info = checklists.find((c) => c.trade === trade) || { item_count: 0, checked_count: 0, has_items: false };
         const target = `/checklist/${encodeURIComponent(trade)}${siteId ? `?site=${encodeURIComponent(siteId)}` : ''}`;
         return (
-          <div className="checklist-card" key={trade} onClick={() => navigate(target)}>
-            <div className="checklist-card-left">
-              <span className="trade-icon">{TRADE_ICONS[trade] || '📋'}</span>
-              <div>
-                <strong>{trade}</strong>
-                <span className="checklist-progress">
-                  {info.has_items ? `${info.checked_count} / ${info.item_count}` : '항목 없음 · 템플릿 불러오기 가능'}
-                </span>
+          <div className="trade-card" key={trade} onClick={() => navigate(target)}>
+            <div className="trade-icon">
+              {(() => { const Icon = TRADE_ICONS_SVG[trade]; return Icon ? <Icon size={22} /> : '📋'; })()}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div className="trade-name">{trade}</div>
+              <div className="trade-status">
+                {info.has_items ? `${info.checked_count} / ${info.item_count} 항목 완료` : '항목 없음 · 템플릿 불러오기 가능'}
               </div>
             </div>
-            <span className="checklist-caret">›</span>
+            <div className="trade-progress">
+              <div className="trade-num mono">{info.has_items ? `${info.checked_count} / ${info.item_count}` : '—'}</div>
+              {info.item_count > 0 && (
+                <div className="bar"><i style={{ width: `${Math.round(info.checked_count / info.item_count * 100)}%` }} /></div>
+              )}
+            </div>
           </div>
         );
       })}
@@ -1514,7 +1544,7 @@ function NoticePopup({ notice, onClose }) {
       <div className="notice-popup-card" onClick={(e) => e.stopPropagation()}>
         <div className="notice-popup-header">
           <span className="notice-popup-badge">📢 공지사항</span>
-          <button className="notice-popup-close" onClick={onClose}>✕</button>
+          <button className="notice-popup-close" onClick={onClose} aria-label="닫기"><IcoX size={20} /></button>
         </div>
         <h2 className="notice-popup-title">{notice.title}</h2>
         <div className="notice-popup-meta">
