@@ -5,9 +5,13 @@ import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import unquote
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+
+from app.routers.auth import is_manager_user
+from app.services.admin_auth import has_valid_admin_token
 
 router = APIRouter(tags=["notices"])
 
@@ -36,13 +40,16 @@ def _save(data: dict) -> None:
     NOTICES_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _check_admin(token: str | None) -> None:
-    import os
-    expected = os.getenv("ADMIN_TOKEN", "").strip()
-    if not expected:
-        raise HTTPException(status_code=500, detail="ADMIN_TOKEN이 서버에 설정되지 않았습니다.")
-    if not token or token.strip() != expected:
-        raise HTTPException(status_code=403, detail="관리자 권한이 필요합니다.")
+def _decode_header(value: str | None) -> str:
+    return unquote(value or "").strip()
+
+
+def _check_notice_manager(token: str | None, user_name: str | None, user_sabun: str | None) -> None:
+    if has_valid_admin_token(token):
+        return
+    if is_manager_user(_decode_header(user_name), _decode_header(user_sabun)):
+        return
+    raise HTTPException(status_code=403, detail="공지사항 관리 권한이 필요합니다.")
 
 
 # ── 공지 목록 ────────────────────────────────────────────────────────────────
@@ -74,8 +81,10 @@ async def create_notice(
     poster:  str        = Form(...),
     file:    UploadFile = File(None),
     x_admin_token: str  = Header(default="", alias="X-Admin-Token"),
+    x_user_name: str = Header(default="", alias="X-User-Name"),
+    x_user_sabun: str = Header(default="", alias="X-User-Sabun"),
 ):
-    _check_admin(x_admin_token)
+    _check_notice_manager(x_admin_token, x_user_name, x_user_sabun)
 
     if not title.strip():
         raise HTTPException(status_code=400, detail="제목을 입력해주세요.")
@@ -124,8 +133,10 @@ async def create_notice(
 def delete_notice(
     notice_id: str,
     x_admin_token: str = Header(default="", alias="X-Admin-Token"),
+    x_user_name: str = Header(default="", alias="X-User-Name"),
+    x_user_sabun: str = Header(default="", alias="X-User-Sabun"),
 ):
-    _check_admin(x_admin_token)
+    _check_notice_manager(x_admin_token, x_user_name, x_user_sabun)
     data = _load()
     notices = data.get("notices", [])
     target = next((n for n in notices if n["id"] == notice_id), None)

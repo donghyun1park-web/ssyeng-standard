@@ -370,6 +370,7 @@ input, select, textarea, button { font-family: var(--font-sans); }
 .form-card { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 20px; }
 .form-card h3 { font-size: 15px; font-weight: 600; margin-bottom: 14px; }
 .button-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.button-row.compact { margin-top: 0; flex-wrap: wrap; justify-content: flex-end; }
 
 /* ============================================================
    CHECKLIST
@@ -452,6 +453,33 @@ input, select, textarea, button { font-family: var(--font-sans); }
 .doc-row:last-child { border-bottom: none; }
 .doc-row strong { font-size: 14px; font-family: var(--font-serif); }
 .doc-row span { font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono); }
+.admin-inline-form,
+.admin-user-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.admin-user-add {
+  grid-template-columns: minmax(0, 1fr) minmax(100px, 0.7fr) auto auto;
+}
+.admin-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.admin-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+.admin-user-row {
+  grid-template-columns: minmax(88px, 0.8fr) minmax(96px, 0.7fr) minmax(140px, 1fr) auto;
+}
+.admin-row input { min-width: 0; }
+.admin-check { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-secondary); }
+.admin-check input { width: 18px; height: 18px; accent-color: var(--accent); }
 
 /* ============================================================
    PDF VIEWER (dark)
@@ -1056,6 +1084,17 @@ textarea:focus,
 
   .brand-strip-logo span {
     display: none;
+  }
+
+  .admin-inline-form,
+  .admin-user-add,
+  .admin-row,
+  .admin-user-row {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-row .button-row {
+    justify-content: flex-start;
   }
 
 }

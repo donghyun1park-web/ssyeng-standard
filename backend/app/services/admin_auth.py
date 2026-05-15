@@ -7,6 +7,12 @@ from fastapi import Header, HTTPException
 load_dotenv()
 
 
+def has_valid_admin_token(token: str | None) -> bool:
+    expected = os.getenv("ADMIN_TOKEN", "").strip()
+    supplied = (token or "").strip()
+    return bool(expected and supplied and hmac.compare_digest(supplied, expected))
+
+
 def require_admin_token(x_admin_token: str = Header(default="", alias="X-Admin-Token")) -> None:
     expected = os.getenv("ADMIN_TOKEN", "").strip()
     supplied = (x_admin_token or "").strip()

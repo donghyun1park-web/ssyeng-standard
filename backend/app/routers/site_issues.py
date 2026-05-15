@@ -5,9 +5,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
+from urllib.parse import unquote
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
+
+from app.routers.auth import get_auth_sites, is_known_user, is_manager_user
+from app.services.admin_auth import has_valid_admin_token, require_admin_token
 
 router = APIRouter(tags=["site-issues"])
 
@@ -31,6 +35,82 @@ def _load() -> dict:
 def _save(data: dict) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     SITES_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _decode_header(value: str | None) -> str:
+    return unquote(value or "").strip()
+
+
+def _site_keys(site: dict) -> set[str]:
+    return {str(site.get("id", "")).strip(), str(site.get("site_name", "")).strip()} - {""}
+
+
+def _virtual_site(site_name: str) -> dict:
+    return {
+        "id": site_name,
+        "site_name": site_name,
+        "site_scale": "",
+        "construction_start": "",
+        "construction_end": "",
+        "manager_name": "",
+        "description": "로그인 현장명 데이터베이스",
+        "source": "auth",
+    }
+
+
+def _all_sites(data: dict) -> list[dict]:
+    result = [_virtual_site(site_name) for site_name in get_auth_sites()]
+    known_names = {site["site_name"] for site in result}
+    for site in data.get("sites", []):
+        if site.get("site_name") in known_names:
+            continue
+        result.append({**site, "source": site.get("source", "custom")})
+    return result
+
+
+def _find_site(data: dict, site_id: str) -> dict | None:
+    for site in _all_sites(data):
+        if site_id in _site_keys(site):
+            return site
+    return None
+
+
+def _count_for_site(items: list[dict], site: dict) -> int:
+    keys = _site_keys(site)
+    return sum(1 for item in items if item.get("site_id") in keys)
+
+
+def _items_for_site(items: list[dict], site: dict) -> list[dict]:
+    keys = _site_keys(site)
+    return [item for item in items if item.get("site_id") in keys]
+
+
+def _can_manage_site(
+    site: dict,
+    x_user_name: str | None,
+    x_user_sabun: str | None,
+    x_user_site: str | None,
+    x_admin_token: str | None,
+) -> bool:
+    if has_valid_admin_token(x_admin_token):
+        return True
+    user_name = _decode_header(x_user_name)
+    user_sabun = _decode_header(x_user_sabun)
+    user_site = _decode_header(x_user_site)
+    if is_manager_user(user_name, user_sabun):
+        return True
+    return bool(is_known_user(user_name, user_sabun) and user_site in _site_keys(site))
+
+
+def _require_site_manager(
+    site: dict,
+    x_user_name: str | None,
+    x_user_sabun: str | None,
+    x_user_site: str | None,
+    x_admin_token: str | None,
+) -> None:
+    if not _can_manage_site(site, x_user_name, x_user_sabun, x_user_site, x_admin_token):
+        raise HTTPException(status_code=403, detail="해당 현장 관리 권한이 필요합니다.")
 
 
 # ── Models ──────────────────────────────────────────────────────────────────
@@ -98,16 +178,14 @@ class SiteIssueUpdate(BaseModel):
 @router.get("/sites")
 def list_sites():
     data = _load()
-    sites = data.get("sites", [])
     reviews = data.get("drawing_reviews", [])
     issues = data.get("site_issues", [])
     result = []
-    for site in sites:
-        sid = site["id"]
+    for site in _all_sites(data):
         result.append({
             **site,
-            "drawing_review_count": sum(1 for r in reviews if r.get("site_id") == sid),
-            "issue_count": sum(1 for i in issues if i.get("site_id") == sid),
+            "drawing_review_count": _count_for_site(reviews, site),
+            "issue_count": _count_for_site(issues, site),
         })
     return {"sites": result, "count": len(result)}
 
@@ -115,15 +193,15 @@ def list_sites():
 @router.get("/sites/{site_id}")
 def get_site(site_id: str):
     data = _load()
-    site = next((s for s in data.get("sites", []) if s["id"] == site_id), None)
+    site = _find_site(data, site_id)
     if not site:
         raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
-    reviews = [r for r in data.get("drawing_reviews", []) if r.get("site_id") == site_id]
-    issues = [i for i in data.get("site_issues", []) if i.get("site_id") == site_id]
+    reviews = _items_for_site(data.get("drawing_reviews", []), site)
+    issues = _items_for_site(data.get("site_issues", []), site)
     return {"site": site, "drawing_reviews": reviews, "site_issues": issues}
 
 
-@router.post("/sites", status_code=201)
+@router.post("/sites", status_code=201, dependencies=[Depends(require_admin_token)])
 def create_site(body: SiteCreate):
     data = _load()
     site = {
@@ -142,7 +220,7 @@ def create_site(body: SiteCreate):
     return {"ok": True, "site": site}
 
 
-@router.put("/sites/{site_id}")
+@router.put("/sites/{site_id}", dependencies=[Depends(require_admin_token)])
 def update_site(site_id: str, body: SiteUpdate):
     data = _load()
     idx = next((i for i, s in enumerate(data.get("sites", [])) if s["id"] == site_id), None)
@@ -158,7 +236,7 @@ def update_site(site_id: str, body: SiteUpdate):
     return {"ok": True, "site": site}
 
 
-@router.delete("/sites/{site_id}")
+@router.delete("/sites/{site_id}", dependencies=[Depends(require_admin_token)])
 def delete_site(site_id: str):
     data = _load()
     before = len(data.get("sites", []))
@@ -174,18 +252,28 @@ def delete_site(site_id: str):
 # ── Drawing Reviews ──────────────────────────────────────────────────────────
 
 @router.post("/drawing-reviews", status_code=201)
-def create_drawing_review(body: DrawingReviewCreate):
+def create_drawing_review(
+    body: DrawingReviewCreate,
+    x_user_name: str = Header(default="", alias="X-User-Name"),
+    x_user_sabun: str = Header(default="", alias="X-User-Sabun"),
+    x_user_site: str = Header(default="", alias="X-User-Site"),
+    x_admin_token: str = Header(default="", alias="X-Admin-Token"),
+):
     data = _load()
-    if not any(s["id"] == body.site_id for s in data.get("sites", [])):
+    site = _find_site(data, body.site_id)
+    if not site:
         raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+    _require_site_manager(site, x_user_name, x_user_sabun, x_user_site, x_admin_token)
     review = {
         "id": f"dr-{uuid.uuid4().hex[:10]}",
-        "site_id": body.site_id,
+        "site_id": site["id"],
         "category": body.category,
         "location": body.location,
         "review_content": body.review_content,
         "action_plan": body.action_plan,
         "status": body.status,
+        "created_by_name": _decode_header(x_user_name),
+        "created_by_sabun": _decode_header(x_user_sabun),
         "created_at": _now(),
         "updated_at": _now(),
     }
@@ -195,28 +283,51 @@ def create_drawing_review(body: DrawingReviewCreate):
 
 
 @router.put("/drawing-reviews/{review_id}")
-def update_drawing_review(review_id: str, body: DrawingReviewUpdate):
+def update_drawing_review(
+    review_id: str,
+    body: DrawingReviewUpdate,
+    x_user_name: str = Header(default="", alias="X-User-Name"),
+    x_user_sabun: str = Header(default="", alias="X-User-Sabun"),
+    x_user_site: str = Header(default="", alias="X-User-Site"),
+    x_admin_token: str = Header(default="", alias="X-Admin-Token"),
+):
     data = _load()
     idx = next((i for i, r in enumerate(data.get("drawing_reviews", [])) if r["id"] == review_id), None)
     if idx is None:
         raise HTTPException(status_code=404, detail="도면검토를 찾을 수 없습니다.")
     review = data["drawing_reviews"][idx]
+    site = _find_site(data, review.get("site_id", ""))
+    if not site:
+        raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+    _require_site_manager(site, x_user_name, x_user_sabun, x_user_site, x_admin_token)
     for field in ("category", "location", "review_content", "action_plan", "status"):
         val = getattr(body, field)
         if val is not None:
             review[field] = val
+    review["updated_by_name"] = _decode_header(x_user_name)
+    review["updated_by_sabun"] = _decode_header(x_user_sabun)
     review["updated_at"] = _now()
     _save(data)
     return {"ok": True, "review": review}
 
 
 @router.delete("/drawing-reviews/{review_id}")
-def delete_drawing_review(review_id: str):
+def delete_drawing_review(
+    review_id: str,
+    x_user_name: str = Header(default="", alias="X-User-Name"),
+    x_user_sabun: str = Header(default="", alias="X-User-Sabun"),
+    x_user_site: str = Header(default="", alias="X-User-Site"),
+    x_admin_token: str = Header(default="", alias="X-Admin-Token"),
+):
     data = _load()
-    before = len(data.get("drawing_reviews", []))
-    data["drawing_reviews"] = [r for r in data.get("drawing_reviews", []) if r["id"] != review_id]
-    if len(data["drawing_reviews"]) == before:
+    review = next((r for r in data.get("drawing_reviews", []) if r["id"] == review_id), None)
+    if not review:
         raise HTTPException(status_code=404, detail="도면검토를 찾을 수 없습니다.")
+    site = _find_site(data, review.get("site_id", ""))
+    if not site:
+        raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+    _require_site_manager(site, x_user_name, x_user_sabun, x_user_site, x_admin_token)
+    data["drawing_reviews"] = [r for r in data.get("drawing_reviews", []) if r["id"] != review_id]
     _save(data)
     return {"ok": True}
 
@@ -224,13 +335,21 @@ def delete_drawing_review(review_id: str):
 # ── Site Issues ───────────────────────────────────────────────────────────────
 
 @router.post("/site-issues", status_code=201)
-def create_site_issue(body: SiteIssueCreate):
+def create_site_issue(
+    body: SiteIssueCreate,
+    x_user_name: str = Header(default="", alias="X-User-Name"),
+    x_user_sabun: str = Header(default="", alias="X-User-Sabun"),
+    x_user_site: str = Header(default="", alias="X-User-Site"),
+    x_admin_token: str = Header(default="", alias="X-Admin-Token"),
+):
     data = _load()
-    if not any(s["id"] == body.site_id for s in data.get("sites", [])):
+    site = _find_site(data, body.site_id)
+    if not site:
         raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+    _require_site_manager(site, x_user_name, x_user_sabun, x_user_site, x_admin_token)
     issue = {
         "id": f"iss-{uuid.uuid4().hex[:10]}",
-        "site_id": body.site_id,
+        "site_id": site["id"],
         "trade": body.trade,
         "location": body.location,
         "issue_content": body.issue_content,
@@ -239,6 +358,8 @@ def create_site_issue(body: SiteIssueCreate):
         "status": body.status,
         "related_standard": body.related_standard,
         "related_page": body.related_page,
+        "created_by_name": _decode_header(x_user_name),
+        "created_by_sabun": _decode_header(x_user_sabun),
         "created_at": _now(),
         "updated_at": _now(),
     }
@@ -248,27 +369,50 @@ def create_site_issue(body: SiteIssueCreate):
 
 
 @router.put("/site-issues/{issue_id}")
-def update_site_issue(issue_id: str, body: SiteIssueUpdate):
+def update_site_issue(
+    issue_id: str,
+    body: SiteIssueUpdate,
+    x_user_name: str = Header(default="", alias="X-User-Name"),
+    x_user_sabun: str = Header(default="", alias="X-User-Sabun"),
+    x_user_site: str = Header(default="", alias="X-User-Site"),
+    x_admin_token: str = Header(default="", alias="X-Admin-Token"),
+):
     data = _load()
     idx = next((i for i, iss in enumerate(data.get("site_issues", [])) if iss["id"] == issue_id), None)
     if idx is None:
         raise HTTPException(status_code=404, detail="이슈를 찾을 수 없습니다.")
     issue = data["site_issues"][idx]
+    site = _find_site(data, issue.get("site_id", ""))
+    if not site:
+        raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+    _require_site_manager(site, x_user_name, x_user_sabun, x_user_site, x_admin_token)
     for field in ("trade", "location", "issue_content", "cause", "action_content", "status", "related_standard", "related_page"):
         val = getattr(body, field)
         if val is not None:
             issue[field] = val
+    issue["updated_by_name"] = _decode_header(x_user_name)
+    issue["updated_by_sabun"] = _decode_header(x_user_sabun)
     issue["updated_at"] = _now()
     _save(data)
     return {"ok": True, "issue": issue}
 
 
 @router.delete("/site-issues/{issue_id}")
-def delete_site_issue(issue_id: str):
+def delete_site_issue(
+    issue_id: str,
+    x_user_name: str = Header(default="", alias="X-User-Name"),
+    x_user_sabun: str = Header(default="", alias="X-User-Sabun"),
+    x_user_site: str = Header(default="", alias="X-User-Site"),
+    x_admin_token: str = Header(default="", alias="X-Admin-Token"),
+):
     data = _load()
-    before = len(data.get("site_issues", []))
-    data["site_issues"] = [i for i in data.get("site_issues", []) if i["id"] != issue_id]
-    if len(data["site_issues"]) == before:
+    issue = next((i for i in data.get("site_issues", []) if i["id"] == issue_id), None)
+    if not issue:
         raise HTTPException(status_code=404, detail="이슈를 찾을 수 없습니다.")
+    site = _find_site(data, issue.get("site_id", ""))
+    if not site:
+        raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+    _require_site_manager(site, x_user_name, x_user_sabun, x_user_site, x_admin_token)
+    data["site_issues"] = [i for i in data.get("site_issues", []) if i["id"] != issue_id]
     _save(data)
     return {"ok": True}

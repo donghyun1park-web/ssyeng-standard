@@ -99,6 +99,15 @@ function readUserId() {
   if (user && user.sabun) return user.sabun.trim();
   try { return (localStorage.getItem(STORAGE_KEYS.userId) || '').trim(); } catch { return ''; }
 }
+function userAuthHeaders() {
+  const user = readUser();
+  if (!user) return {};
+  const headers = {};
+  if (user.name) headers['X-User-Name'] = encodeURIComponent(user.name);
+  if (user.sabun) headers['X-User-Sabun'] = encodeURIComponent(user.sabun);
+  if (user.site_name) headers['X-User-Site'] = encodeURIComponent(user.site_name);
+  return headers;
+}
 function readStorage(key, fallback) {
   try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
 }
@@ -168,9 +177,13 @@ async function fetchJson(path, options = {}) {
     options = { ...options, headers: { ...(options.headers || {}), 'X-User-Gemini-Key': userKey } };
   }
   const adminToken = readAdminToken();
-  const adminPath = path.startsWith('/api/migration') || path.startsWith('/api/rag/') || path.startsWith('/api/sites') || path.startsWith('/api/drawing') || path.startsWith('/api/site-issues') || path.startsWith('/api/notices');
+  const adminPath = path.startsWith('/api/admin') || path.startsWith('/api/migration') || path.startsWith('/api/rag/') || path.startsWith('/api/sites') || path.startsWith('/api/drawing') || path.startsWith('/api/site-issues') || path.startsWith('/api/notices');
   if (adminToken && adminPath) {
     options = { ...options, headers: { ...(options.headers || {}), 'X-Admin-Token': adminToken } };
+  }
+  const userManagedPath = path.startsWith('/api/drawing') || path.startsWith('/api/site-issues') || path.startsWith('/api/notices');
+  if (userManagedPath) {
+    options = { ...options, headers: { ...(options.headers || {}), ...userAuthHeaders() } };
   }
   if (path.startsWith('/api/checklists')) {
     const userId = readUserId();
@@ -179,6 +192,17 @@ async function fetchJson(path, options = {}) {
   const response = await fetch(apiUrl(path), options);
   if (!response.ok) throw new Error(`API ${response.status}`);
   return response.json();
+}
+
+async function verifyAdminToken(token) {
+  const clean = (token || '').trim();
+  if (!clean) throw new Error('ADMIN TOKEN을 입력하세요.');
+  const response = await fetch(apiUrl('/api/admin/verify'), {
+    headers: { 'X-Admin-Token': clean },
+  });
+  if (!response.ok) throw new Error('ADMIN TOKEN이 올바르지 않습니다.');
+  localStorage.setItem(STORAGE_KEYS.adminToken, clean);
+  return true;
 }
 
 function useStandardItems() {
@@ -371,9 +395,9 @@ function App() {
             <Route path="/" element={<HomePage appState={appState} />} />
             <Route path="/search" element={<SearchPage appState={appState} />} />
             <Route path="/item/:id" element={<DetailPage appState={appState} />} />
-            <Route path="/sites" element={<SiteListPage />} />
+            <Route path="/sites" element={<SiteListPage appState={appState} />} />
             <Route path="/sites/new" element={<SiteFormPage />} />
-            <Route path="/sites/:siteId" element={<SiteDetailPage />} />
+            <Route path="/sites/:siteId" element={<SiteDetailPage appState={appState} />} />
             <Route path="/checklist" element={<ChecklistPage appState={appState} />} />
             <Route path="/checklist/:trade" element={<ChecklistDetailPage appState={appState} />} />
             <Route path="/notices" element={<NoticesPage appState={appState} />} />
@@ -874,11 +898,12 @@ function DetailPage({ appState }) {
 
 // ── Site Issues Pages ─────────────────────────────────────────────────────────
 
-function SiteListPage() {
+function SiteListPage({ appState }) {
   const navigate = useNavigate();
   const [sites, setSites] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const canManageSites = !!readAdminToken();
 
   const load = async () => {
     setLoading(true);
@@ -898,7 +923,7 @@ function SiteListPage() {
     <section className="stack">
       <div className="page-header">
         <h2>현장이슈 공유</h2>
-        <button className="btn-primary" onClick={() => navigate('/sites/new')}>+ 현장 등록</button>
+        {canManageSites && <button className="btn-primary" onClick={() => navigate('/sites/new')}>+ 현장 등록</button>}
       </div>
 
       {error && <div className="error-box">{error}</div>}
@@ -907,7 +932,7 @@ function SiteListPage() {
       ) : sites.length === 0 ? (
         <div className="empty-hint">
           등록된 현장이 없습니다.<br />
-          <button className="btn-link" onClick={() => navigate('/sites/new')}>첫 현장을 등록하세요</button>
+          {canManageSites && <button className="btn-link" onClick={() => navigate('/sites/new')}>첫 현장을 등록하세요</button>}
         </div>
       ) : sites.map((site) => (
         <div className="site-card" key={site.id}>
@@ -987,7 +1012,7 @@ function SiteFormPage() {
   );
 }
 
-function SiteDetailPage() {
+function SiteDetailPage({ appState }) {
   const { siteId } = useParams();
   const navigate = useNavigate();
   const [data, setData] = useState(null);
@@ -1017,6 +1042,10 @@ function SiteDetailPage() {
   const site = data.site;
   const reviews = data.drawing_reviews || [];
   const issues = data.site_issues || [];
+  const currentUser = appState.currentUser || {};
+  const canManageSite = !!readAdminToken()
+    || !!currentUser.can_manage_all
+    || [site.id, site.site_name].includes(currentUser.site_name);
 
   return (
     <section className="stack">
@@ -1045,33 +1074,31 @@ function SiteDetailPage() {
 
       {tab === 'review' && (
         <>
-          <button className="btn-outline" onClick={() => setShowReviewForm(!showReviewForm)}>
-            {showReviewForm ? '취소' : '+ 도면검토 추가'}
-          </button>
+          {canManageSite ? (
+            <button className="btn-outline" onClick={() => setShowReviewForm(!showReviewForm)}>
+              {showReviewForm ? '취소' : '+ 도면검토 추가'}
+            </button>
+          ) : (
+            <div className="empty-hint">도면검토 관리는 해당 현장 인원 또는 관리 권한 인원만 가능합니다.</div>
+          )}
           {showReviewForm && (
             <DrawingReviewForm siteId={siteId} onSaved={() => { setShowReviewForm(false); load(); }} />
           )}
           {reviews.length === 0 ? (
             <div className="empty-hint">등록된 도면검토가 없습니다.</div>
           ) : reviews.map((r) => (
-            <div className="issue-card" key={r.id}>
-              <div className="issue-header">
-                <strong>{r.review_content}</strong>
-                <StatusBadge status={r.status} />
-              </div>
-              {r.location && <p className="issue-loc">위치: {r.location}</p>}
-              {r.category && <p className="issue-meta">분류: {r.category}</p>}
-              {r.action_plan && <p className="issue-action">조치방향: {r.action_plan}</p>}
-            </div>
+            <DrawingReviewCard key={r.id} review={r} canManage={canManageSite} onChanged={load} />
           ))}
         </>
       )}
 
       {tab === 'issue' && (
         <>
-          <button className="btn-outline" onClick={() => setShowIssueForm(!showIssueForm)}>
-            {showIssueForm ? '취소' : '+ 이슈 추가'}
-          </button>
+          {canManageSite && (
+            <button className="btn-outline" onClick={() => setShowIssueForm(!showIssueForm)}>
+              {showIssueForm ? '취소' : '+ 이슈 추가'}
+            </button>
+          )}
           {showIssueForm && (
             <SiteIssueForm siteId={siteId} onSaved={() => { setShowIssueForm(false); load(); }} />
           )}
@@ -1109,9 +1136,66 @@ function StatusBadge({ status, type }) {
   return <span className={`status-badge ${colorMap[status] || 'badge-gray'}`}>{status}</span>;
 }
 
-function DrawingReviewForm({ siteId, onSaved }) {
+function DrawingReviewCard({ review, canManage, onChanged }) {
+  const [editing, setEditing] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleDelete = async () => {
+    if (!window.confirm('이 도면검토를 삭제하시겠습니까?')) return;
+    setError('');
+    try {
+      await fetchJson(`/api/drawing-reviews/${review.id}`, { method: 'DELETE' });
+      onChanged();
+    } catch {
+      setError('삭제 권한이 없거나 삭제에 실패했습니다.');
+    }
+  };
+
+  if (editing) {
+    return (
+      <DrawingReviewForm
+        review={review}
+        onCancel={() => setEditing(false)}
+        onSaved={() => { setEditing(false); onChanged(); }}
+      />
+    );
+  }
+
+  return (
+    <div className="issue-card">
+      <div className="issue-header">
+        <strong>{review.review_content}</strong>
+        <StatusBadge status={review.status} />
+      </div>
+      {review.location && <p className="issue-loc">위치: {review.location}</p>}
+      {review.category && <p className="issue-meta">분류: {review.category}</p>}
+      {review.action_plan && <p className="issue-action">조치방향: {review.action_plan}</p>}
+      {(review.created_by_name || review.updated_by_name) && (
+        <p className="issue-meta">
+          {review.created_by_name && `작성: ${review.created_by_name}`}
+          {review.updated_by_name && ` · 수정: ${review.updated_by_name}`}
+        </p>
+      )}
+      {error && <div className="error-box">{error}</div>}
+      {canManage && (
+        <div className="button-row">
+          <button className="btn-outline" onClick={() => setEditing(true)}>수정</button>
+          <button className="btn-danger-sm" onClick={handleDelete}>삭제</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DrawingReviewForm({ siteId, review, onSaved, onCancel }) {
   const STATUS_OPTIONS = ['검토중', '협의중', '반영완료', '보류'];
-  const [form, setForm] = useState({ category: '', location: '', review_content: '', action_plan: '', status: '검토중' });
+  const [form, setForm] = useState({
+    category: review?.category || '',
+    location: review?.location || '',
+    review_content: review?.review_content || '',
+    action_plan: review?.action_plan || '',
+    status: review?.status || '검토중',
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -1121,13 +1205,13 @@ function DrawingReviewForm({ siteId, onSaved }) {
     if (!form.review_content.trim()) { setError('검토 내용을 입력하세요.'); return; }
     setLoading(true);
     try {
-      await fetchJson('/api/drawing-reviews', {
-        method: 'POST',
+      await fetchJson(review ? `/api/drawing-reviews/${review.id}` : '/api/drawing-reviews', {
+        method: review ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, site_id: siteId }),
+        body: JSON.stringify(review ? form : { ...form, site_id: siteId }),
       });
       onSaved();
-    } catch { setError('저장에 실패했습니다.'); } finally { setLoading(false); }
+    } catch { setError('저장 권한이 없거나 저장에 실패했습니다.'); } finally { setLoading(false); }
   };
 
   return (
@@ -1145,7 +1229,10 @@ function DrawingReviewForm({ siteId, onSaved }) {
         {STATUS_OPTIONS.map((s) => <option key={s}>{s}</option>)}
       </select>
       {error && <div className="error-box">{error}</div>}
-      <button type="submit" className="btn-primary" disabled={loading}>{loading ? '저장 중...' : '저장'}</button>
+      <div className="button-row">
+        <button type="submit" className="btn-primary" disabled={loading}>{loading ? '저장 중...' : '저장'}</button>
+        {onCancel && <button type="button" className="btn-outline" onClick={onCancel}>취소</button>}
+      </div>
     </form>
   );
 }
@@ -1571,7 +1658,7 @@ function NoticesPage({ appState }) {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
-  const isAdmin = !!readAdminToken();
+  const canManageNotices = !!readAdminToken() || !!appState.currentUser?.can_manage_all;
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1588,7 +1675,7 @@ function NoticesPage({ appState }) {
     try {
       const res = await fetch(apiUrl(`/api/notices/${id}`), {
         method: 'DELETE',
-        headers: { 'X-Admin-Token': readAdminToken() },
+        headers: { 'X-Admin-Token': readAdminToken(), ...userAuthHeaders() },
       });
       if (res.ok) load();
       else alert('삭제 실패');
@@ -1599,14 +1686,14 @@ function NoticesPage({ appState }) {
     <section className="stack">
       <div className="page-header">
         <h2>공지사항</h2>
-        {isAdmin && (
+        {canManageNotices && (
           <button className="btn-primary" onClick={() => setShowForm(!showForm)}>
             {showForm ? '취소' : '+ 공지 작성'}
           </button>
         )}
       </div>
 
-      {showForm && isAdmin && (
+      {showForm && canManageNotices && (
         <NoticeForm
           currentUser={appState.currentUser}
           onSaved={() => { setShowForm(false); load(); }}
@@ -1651,7 +1738,7 @@ function NoticesPage({ appState }) {
                   </span>
                 </a>
               )}
-              {isAdmin && (
+              {canManageNotices && (
                 <button className="btn-danger-sm" onClick={() => handleDelete(n.id)}>
                   삭제
                 </button>
@@ -1684,7 +1771,7 @@ function NoticeForm({ currentUser, onSaved }) {
       if (file) fd.append('file', file);
       const res = await fetch(apiUrl('/api/notices'), {
         method: 'POST',
-        headers: { 'X-Admin-Token': readAdminToken() },
+        headers: { 'X-Admin-Token': readAdminToken(), ...userAuthHeaders() },
         body: fd,
       });
       if (!res.ok) {
@@ -1740,6 +1827,7 @@ function NoticeForm({ currentUser, onSaved }) {
 // ── Settings Page ─────────────────────────────────────────────────────────────
 
 function SettingsPage({ appState }) {
+  const navigate = useNavigate();
   return (
     <section className="stack">
       <div className="page-header">
@@ -1764,7 +1852,6 @@ function SettingsPage({ appState }) {
       </div>
 
       <GeminiKeyCard />
-      <AdminTokenCard />
 
       <div className="settings-card">
         <h3>화면 설정</h3>
@@ -1787,7 +1874,7 @@ function SettingsPage({ appState }) {
 
       <div className="settings-card">
         <h3>데이터 관리</h3>
-        <NavLink className="btn-outline block" to="/admin">관리자 문서 관리</NavLink>
+        <DataManagementAccessCard onAuthorized={() => navigate('/admin')} />
         <button className="btn-danger" style={{ marginTop: 8 }} onClick={() => {
           if (window.confirm('저장된 즐겨찾기, 체크리스트, 설정이 모두 삭제됩니다. 계속하시겠습니까?')) {
             localStorage.clear();
@@ -1838,6 +1925,43 @@ function GeminiKeyCard() {
   );
 }
 
+function DataManagementAccessCard({ onAuthorized }) {
+  const [draft, setDraft] = useState(() => readAdminToken());
+  const [reveal, setReveal] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [message, setMessage] = useState('');
+
+  const enter = async () => {
+    setChecking(true); setMessage('');
+    try {
+      await verifyAdminToken(draft);
+      onAuthorized();
+    } catch (err) {
+      setMessage(err.message || 'ADMIN TOKEN 확인에 실패했습니다.');
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  return (
+    <div className="stack" style={{ gap: 10 }}>
+      <p className="settings-note">현장명 데이터베이스, 로그인 명단, PDF 업로드 관리는 서버 ADMIN TOKEN 확인 후 입장합니다.</p>
+      <input
+        type={reveal ? 'text' : 'password'}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        placeholder="ADMIN TOKEN 입력"
+        autoComplete="off"
+      />
+      <div className="button-row">
+        <button className="btn-primary" onClick={enter} disabled={checking}>{checking ? '확인 중...' : '데이터 관리 입장'}</button>
+        <button className="btn-outline" onClick={() => setReveal((v) => !v)}>{reveal ? '숨기기' : '보기'}</button>
+      </div>
+      {message && <p className="login-error">{message}</p>}
+    </div>
+  );
+}
+
 function AdminTokenCard() {
   const [storedToken, setStoredToken] = useState(() => readAdminToken());
   const [draft, setDraft] = useState(storedToken);
@@ -1878,21 +2002,36 @@ function AdminTokenCard() {
 // ── Admin Page ────────────────────────────────────────────────────────────────
 
 function AdminPage({ appState }) {
+  const [authorized, setAuthorized] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
   const [status, setStatus] = useState(null);
   const [documents, setDocuments] = useState([]);
+  const [authData, setAuthData] = useState({ users: [], sites: [] });
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [parseForm, setParseForm] = useState({ document_title: '', version: '', revision_date: '' });
 
   const load = async () => {
     try {
-      const [statusData, docsData] = await Promise.all([fetchJson('/api/rag/status'), fetchJson('/api/rag/documents')]);
+      const [statusData, docsData, authDataResp] = await Promise.all([
+        fetchJson('/api/rag/status'),
+        fetchJson('/api/rag/documents'),
+        fetchJson('/api/admin/auth-data'),
+      ]);
       setStatus(statusData);
       setDocuments(docsData.documents || []);
+      setAuthData({ users: authDataResp.users || [], sites: authDataResp.sites || [] });
     } catch { setMessage('백엔드에 연결할 수 없습니다.'); }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    verifyAdminToken(readAdminToken())
+      .then(() => setAuthorized(true))
+      .catch(() => setAuthorized(false))
+      .finally(() => setAuthChecking(false));
+  }, []);
+
+  useEffect(() => { if (authorized) load(); }, [authorized]);
 
   const uploadFile = async (event, useFirecrawl) => {
     const file = event.target.files?.[0];
@@ -1919,12 +2058,34 @@ function AdminPage({ appState }) {
     }
   };
 
+  if (authChecking) {
+    return <section className="stack"><div className="loading-row"><span className="spinner" />ADMIN TOKEN 확인 중...</div></section>;
+  }
+
+  if (!authorized) {
+    return (
+      <section className="stack">
+        <div className="page-header">
+          <NavLink className="back-link" to="/settings">← 설정</NavLink>
+          <h2>데이터 관리</h2>
+        </div>
+        <div className="settings-card">
+          <h3>ADMIN TOKEN 필요</h3>
+          <DataManagementAccessCard onAuthorized={() => setAuthorized(true)} />
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="stack">
       <div className="page-header">
         <NavLink className="back-link" to="/settings">← 설정</NavLink>
-        <h2>관리자 문서 관리</h2>
+        <h2>데이터 관리</h2>
       </div>
+
+      <AdminSitesManager sites={authData.sites} onChanged={load} />
+      <AdminUsersManager users={authData.users} onChanged={load} />
 
       <div className="settings-card">
         <h3>표준지침 상태</h3>
@@ -1970,6 +2131,204 @@ function AdminPage({ appState }) {
         ))}
       </div>
     </section>
+  );
+}
+
+function AdminSitesManager({ sites, onChanged }) {
+  const [newSite, setNewSite] = useState('');
+  const [editing, setEditing] = useState(null);
+  const [message, setMessage] = useState('');
+
+  const createSite = async () => {
+    if (!newSite.trim()) return;
+    setMessage('');
+    try {
+      await fetchJson('/api/admin/auth-sites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newSite.trim() }),
+      });
+      setNewSite('');
+      onChanged();
+    } catch (err) {
+      setMessage(`현장명 추가 실패: ${err.message}`);
+    }
+  };
+
+  const saveSite = async (original) => {
+    const next = (editing?.name || '').trim();
+    if (!next) return;
+    setMessage('');
+    try {
+      await fetchJson(`/api/admin/auth-sites/${encodeURIComponent(original)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: next }),
+      });
+      setEditing(null);
+      onChanged();
+    } catch (err) {
+      setMessage(`현장명 수정 실패: ${err.message}`);
+    }
+  };
+
+  const deleteSite = async (site) => {
+    if (!window.confirm(`${site} 현장명을 삭제하시겠습니까?`)) return;
+    setMessage('');
+    try {
+      await fetchJson(`/api/admin/auth-sites/${encodeURIComponent(site)}`, { method: 'DELETE' });
+      onChanged();
+    } catch (err) {
+      setMessage(`현장명 삭제 실패: ${err.message}`);
+    }
+  };
+
+  return (
+    <div className="settings-card">
+      <h3>현장명 데이터베이스 관리</h3>
+      <div className="admin-inline-form">
+        <input value={newSite} onChange={(e) => setNewSite(e.target.value)} placeholder="현장명 추가" />
+        <button className="btn-primary" onClick={createSite}>추가</button>
+      </div>
+      <div className="admin-list">
+        {sites.map((site) => (
+          <div className="admin-row" key={site}>
+            {editing?.original === site ? (
+              <input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+            ) : (
+              <strong>{site}</strong>
+            )}
+            <div className="button-row compact">
+              {editing?.original === site ? (
+                <>
+                  <button className="btn-primary" onClick={() => saveSite(site)}>저장</button>
+                  <button className="btn-outline" onClick={() => setEditing(null)}>취소</button>
+                </>
+              ) : (
+                <>
+                  <button className="btn-outline" onClick={() => setEditing({ original: site, name: site })}>수정</button>
+                  <button className="btn-danger-sm" onClick={() => deleteSite(site)}>삭제</button>
+                </>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      {message && <div className="error-box">{message}</div>}
+    </div>
+  );
+}
+
+function AdminUsersManager({ users, onChanged }) {
+  const [newUser, setNewUser] = useState({ name: '', sabun: '', can_manage_all: false });
+  const [editing, setEditing] = useState(null);
+  const [message, setMessage] = useState('');
+
+  const createUser = async () => {
+    if (!newUser.name.trim() || !newUser.sabun.trim()) return;
+    setMessage('');
+    try {
+      await fetchJson('/api/admin/auth-users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newUser.name.trim(),
+          sabun: newUser.sabun.trim(),
+          can_manage_all: !!newUser.can_manage_all,
+        }),
+      });
+      setNewUser({ name: '', sabun: '', can_manage_all: false });
+      onChanged();
+    } catch (err) {
+      setMessage(`사용자 추가 실패: ${err.message}`);
+    }
+  };
+
+  const saveUser = async (originalSabun) => {
+    setMessage('');
+    try {
+      await fetchJson(`/api/admin/auth-users/${encodeURIComponent(originalSabun)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: editing.name.trim(),
+          sabun: editing.sabun.trim(),
+          can_manage_all: !!editing.can_manage_all,
+        }),
+      });
+      setEditing(null);
+      onChanged();
+    } catch (err) {
+      setMessage(`사용자 수정 실패: ${err.message}`);
+    }
+  };
+
+  const deleteUser = async (user) => {
+    if (!window.confirm(`${user.name} 사용자를 삭제하시겠습니까?`)) return;
+    setMessage('');
+    try {
+      await fetchJson(`/api/admin/auth-users/${encodeURIComponent(user.sabun)}`, { method: 'DELETE' });
+      onChanged();
+    } catch (err) {
+      setMessage(`사용자 삭제 실패: ${err.message}`);
+    }
+  };
+
+  return (
+    <div className="settings-card">
+      <h3>로그인 명단 관리</h3>
+      <div className="admin-user-add">
+        <input value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} placeholder="이름" />
+        <input value={newUser.sabun} onChange={(e) => setNewUser({ ...newUser, sabun: e.target.value })} placeholder="사번" />
+        <label className="admin-check">
+          <input type="checkbox" checked={newUser.can_manage_all} onChange={(e) => setNewUser({ ...newUser, can_manage_all: e.target.checked })} />
+          <span>관리권한</span>
+        </label>
+        <button className="btn-primary" onClick={createUser}>추가</button>
+      </div>
+      <div className="admin-list">
+        {users.map((user) => {
+          const isEditing = editing?.originalSabun === user.sabun;
+          return (
+            <div className="admin-row admin-user-row" key={user.sabun}>
+              {isEditing ? (
+                <>
+                  <input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+                  <input value={editing.sabun} onChange={(e) => setEditing({ ...editing, sabun: e.target.value })} />
+                  <label className="admin-check">
+                    <input type="checkbox" checked={editing.can_manage_all} onChange={(e) => setEditing({ ...editing, can_manage_all: e.target.checked })} />
+                    <span>관리권한</span>
+                  </label>
+                </>
+              ) : (
+                <>
+                  <strong>{user.name}</strong>
+                  <span>사번 {user.sabun}</span>
+                  <label className="admin-check">
+                    <input type="checkbox" checked={!!user.can_manage_all} readOnly />
+                    <span>공지·전체 도면검토</span>
+                  </label>
+                </>
+              )}
+              <div className="button-row compact">
+                {isEditing ? (
+                  <>
+                    <button className="btn-primary" onClick={() => saveUser(user.sabun)}>저장</button>
+                    <button className="btn-outline" onClick={() => setEditing(null)}>취소</button>
+                  </>
+                ) : (
+                  <>
+                    <button className="btn-outline" onClick={() => setEditing({ originalSabun: user.sabun, ...user })}>수정</button>
+                    <button className="btn-danger-sm" onClick={() => deleteUser(user)}>삭제</button>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {message && <div className="error-box">{message}</div>}
+    </div>
   );
 }
 
