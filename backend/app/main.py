@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import ask, auth, checklists, diagnostics, external, mcp, mobile, rag, site_issues, standards, search_quality, migration
+from app.routers import ask, auth, checklists, diagnostics, external, mcp, mobile, notices, rag, site_issues, standards, search_quality, migration
 
 
 DEFAULT_CORS_ORIGINS = [
@@ -52,6 +52,7 @@ app.include_router(mobile.router, prefix="/api")
 app.include_router(search_quality.router, prefix="/api")
 app.include_router(migration.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
+app.include_router(notices.router, prefix="/api")
 app.include_router(site_issues.router, prefix="/api")
 app.include_router(checklists.router, prefix="/api")
 

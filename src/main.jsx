@@ -21,6 +21,7 @@ const STORAGE_KEYS = {
   userId: 'facility-standard:user-id',
   checklistSite: 'facility-standard:checklist-site',
   user: 'facility-standard:user', // { name, sabun }
+  lastNoticeId: 'facility-standard:last-notice-id',
 };
 
 const LAW_URL = 'https://www.law.go.kr/ais/main.do';
@@ -131,7 +132,7 @@ async function fetchJson(path, options = {}) {
     options = { ...options, headers: { ...(options.headers || {}), 'X-User-Gemini-Key': userKey } };
   }
   const adminToken = readAdminToken();
-  const adminPath = path.startsWith('/api/migration') || path.startsWith('/api/rag/') || path.startsWith('/api/sites') || path.startsWith('/api/drawing') || path.startsWith('/api/site-issues');
+  const adminPath = path.startsWith('/api/migration') || path.startsWith('/api/rag/') || path.startsWith('/api/sites') || path.startsWith('/api/drawing') || path.startsWith('/api/site-issues') || path.startsWith('/api/notices');
   if (adminToken && adminPath) {
     options = { ...options, headers: { ...(options.headers || {}), 'X-Admin-Token': adminToken } };
   }
@@ -276,23 +277,42 @@ function LoginPage({ onLogin }) {
 
 function App() {
   const [currentUser, setCurrentUser] = useState(() => readUser());
-  const [favorites, setFavorites] = useStoredState(STORAGE_KEYS.favorites, []);
   const [recent, setRecent] = useStoredState(STORAGE_KEYS.recent, []);
   const [checked, setChecked] = useStoredState(STORAGE_KEYS.checklist, {});
   const [settings, setSettings] = useStoredState(STORAGE_KEYS.settings, {
     compactMode: false, showIds: false, largeTouch: false,
   });
+  const [popupNotice, setPopupNotice] = useState(null);
   const networkOnline = useNetworkStatus();
   const swNotice = useServiceWorkerNotice();
   const { items, apiStatus, refreshItems } = useStandardItems();
 
-  const handleLogout = () => {
-    clearUser();
-    setCurrentUser(null);
+  const handleLogout = () => { clearUser(); setCurrentUser(null); };
+
+  const dismissPopup = () => {
+    if (popupNotice) {
+      try { localStorage.setItem(STORAGE_KEYS.lastNoticeId, popupNotice.id); } catch {}
+      setPopupNotice(null);
+    }
   };
 
+  // 신규 공지 팝업 체크 (앱 시작 시)
+  useEffect(() => {
+    if (!currentUser) return;
+    fetch(apiUrl('/api/notices'))
+      .then((r) => r.json())
+      .then((data) => {
+        const list = data.notices || [];
+        if (!list.length) return;
+        const latest = list[0];
+        const lastSeen = (() => { try { return localStorage.getItem(STORAGE_KEYS.lastNoticeId) || ''; } catch { return ''; } })();
+        if (latest.id !== lastSeen) setPopupNotice(latest);
+      })
+      .catch(() => {});
+  }, [currentUser]);
+
   const appState = {
-    favorites, setFavorites, recent, setRecent,
+    recent, setRecent,
     checked, setChecked, settings, setSettings,
     items, apiStatus, refreshItems, networkOnline, swNotice,
     currentUser, handleLogout,
@@ -306,6 +326,7 @@ function App() {
     <BrowserRouter>
       <div className={['app', settings.compactMode ? 'compact' : '', settings.largeTouch ? 'large-touch' : ''].filter(Boolean).join(' ')}>
         <SwNotice appState={appState} />
+        {popupNotice && <NoticePopup notice={popupNotice} onClose={dismissPopup} />}
         <main className="page-shell">
           <Routes>
             <Route path="/" element={<HomePage appState={appState} />} />
@@ -316,7 +337,7 @@ function App() {
             <Route path="/sites/:siteId" element={<SiteDetailPage />} />
             <Route path="/checklist" element={<ChecklistPage appState={appState} />} />
             <Route path="/checklist/:trade" element={<ChecklistDetailPage appState={appState} />} />
-            <Route path="/saved" element={<SavedPage appState={appState} />} />
+            <Route path="/notices" element={<NoticesPage appState={appState} />} />
             <Route path="/settings" element={<SettingsPage appState={appState} />} />
             <Route path="/admin" element={<AdminPage appState={appState} />} />
             <Route path="/pdf-viewer" element={<PdfViewerPage />} />
@@ -335,7 +356,7 @@ function BottomNav() {
     ['/', '홈', '⌂'],
     ['/search', '검색', '⌕'],
     ['/sites', '현장이슈', '📋'],
-    ['/saved', '즐겨찾기', '★'],
+    ['/notices', '공지사항', '📢'],
     ['/settings', '설정', '⚙'],
   ];
   return (
@@ -412,10 +433,10 @@ function HomePage({ appState }) {
           <strong>체크리스트</strong>
           <span>공종별 현장 점검</span>
         </NavLink>
-        <NavLink className="home-card" to="/saved">
-          <span className="home-card-icon">★</span>
-          <strong>즐겨찾기</strong>
-          <span>최근 본 항목</span>
+        <NavLink className="home-card" to="/notices">
+          <span className="home-card-icon">📢</span>
+          <strong>공지사항</strong>
+          <span>회사·현장 공지</span>
         </NavLink>
       </div>
 
@@ -437,7 +458,7 @@ function HomePage({ appState }) {
       </div>
 
       {!appState.networkOnline && (
-        <div className="offline-notice">오프라인 상태 · 로컬 기준과 즐겨찾기를 사용할 수 있습니다.</div>
+        <div className="offline-notice">오프라인 상태 · 로컬 기준으로 동작합니다.</div>
       )}
     </section>
   );
@@ -599,7 +620,6 @@ function SearchSection({ title, tag, priority, note, children }) {
 }
 
 function CompanyResultCard({ item, appState }) {
-  const isFav = appState.favorites.includes(item.id);
   const pdfUrl = item.pdf_url ? apiUrl(item.pdf_url) : null;
   const pdfPage = item.pdf_page;
   const viewerLink = pdfUrl ? pdfViewerLink(pdfUrl, pdfPage, item.title) : null;
@@ -618,9 +638,6 @@ function CompanyResultCard({ item, appState }) {
         {viewerLink && (
           <NavLink className="btn-pdf" to={viewerLink}>PDF 보기</NavLink>
         )}
-        <button className={isFav ? 'btn-fav active' : 'btn-fav'} onClick={() => toggleFavorite(item.id, appState)}>
-          {isFav ? '★ 즐겨찾기' : '☆ 즐겨찾기'}
-        </button>
       </div>
     </div>
   );
@@ -763,7 +780,6 @@ function DetailPage({ appState }) {
     );
   }
 
-  const isFav = appState.favorites.includes(item.id);
   const pdfUrl = item.pdf_url ? apiUrl(item.pdf_url) : '';
   const pdfPage = item.pdf_page;
   const viewerLink = pdfUrl ? pdfViewerLink(pdfUrl, pdfPage, item.title) : '';
@@ -787,9 +803,6 @@ function DetailPage({ appState }) {
         ) : item.body ? (
           <p className="body-text">{item.body}</p>
         ) : null}
-        <button className={isFav ? 'btn-fav active' : 'btn-fav'} onClick={() => toggleFavorite(item.id, appState)}>
-          {isFav ? '★ 즐겨찾기 해제' : '☆ 즐겨찾기 추가'}
-        </button>
       </article>
     </section>
   );
@@ -1447,62 +1460,210 @@ function ChecklistDetailPage({ appState }) {
 
 // ── Saved Page ────────────────────────────────────────────────────────────────
 
-function SavedPage({ appState }) {
-  const [tab, setTab] = useState('fav');
-  const items = appState.items;
-  const favoriteItems = appState.favorites.map((id) => items.find((item) => item.id === id)).filter(Boolean);
-  const recentItems = appState.recent.map((id) => items.find((item) => item.id === id)).filter(Boolean);
+// ── Notice Popup ──────────────────────────────────────────────────────────────
+
+function NoticePopup({ notice, onClose }) {
+  return (
+    <div className="notice-popup-overlay" onClick={onClose}>
+      <div className="notice-popup-card" onClick={(e) => e.stopPropagation()}>
+        <div className="notice-popup-header">
+          <span className="notice-popup-badge">📢 공지사항</span>
+          <button className="notice-popup-close" onClick={onClose}>✕</button>
+        </div>
+        <h2 className="notice-popup-title">{notice.title}</h2>
+        <div className="notice-popup-meta">
+          <span>{notice.poster}</span>
+          <span>{notice.date}</span>
+        </div>
+        <div className="notice-popup-content">{notice.content}</div>
+        {notice.file && (
+          <a
+            className="notice-file-link"
+            href={apiUrl(notice.file.file_url)}
+            target="_blank"
+            rel="noreferrer"
+            download={notice.file.original_name}
+          >
+            📎 {notice.file.original_name}
+          </a>
+        )}
+        <button className="btn-primary notice-popup-confirm" onClick={onClose}>
+          확인
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Notices Page ──────────────────────────────────────────────────────────────
+
+function NoticesPage({ appState }) {
+  const [notices, setNotices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [expandedId, setExpandedId] = useState(null);
+  const isAdmin = !!readAdminToken();
+
+  const load = useCallback(() => {
+    setLoading(true);
+    fetchJson('/api/notices')
+      .then((d) => setNotices(d.notices || []))
+      .catch(() => setNotices([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('이 공지를 삭제하시겠습니까?')) return;
+    try {
+      const res = await fetch(apiUrl(`/api/notices/${id}`), {
+        method: 'DELETE',
+        headers: { 'X-Admin-Token': readAdminToken() },
+      });
+      if (res.ok) load();
+      else alert('삭제 실패');
+    } catch { alert('삭제 실패'); }
+  };
 
   return (
     <section className="stack">
       <div className="page-header">
-        <h2>즐겨찾기 / 최근 본 항목</h2>
+        <h2>공지사항</h2>
+        {isAdmin && (
+          <button className="btn-primary" onClick={() => setShowForm(!showForm)}>
+            {showForm ? '취소' : '+ 공지 작성'}
+          </button>
+        )}
       </div>
-      <div className="tab-row">
-        <button className={tab === 'fav' ? 'tab active' : 'tab'} onClick={() => setTab('fav')}>
-          즐겨찾기 {favoriteItems.length}
-        </button>
-        <button className={tab === 'recent' ? 'tab active' : 'tab'} onClick={() => setTab('recent')}>
-          최근 본 항목 {recentItems.length}
-        </button>
-      </div>
-      {tab === 'fav' && (
-        favoriteItems.length === 0
-          ? <div className="empty-hint">즐겨찾기가 없습니다. 검색 결과에서 ☆을 눌러 추가하세요.</div>
-          : favoriteItems.map((item) => <SavedItemCard key={item.id} item={item} appState={appState} />)
+
+      {showForm && isAdmin && (
+        <NoticeForm
+          currentUser={appState.currentUser}
+          onSaved={() => { setShowForm(false); load(); }}
+        />
       )}
-      {tab === 'recent' && (
-        recentItems.length === 0
-          ? <div className="empty-hint">최근 본 항목이 없습니다.</div>
-          : recentItems.map((item) => <SavedItemCard key={item.id} item={item} appState={appState} />)
-      )}
+
+      {loading ? (
+        <div className="loading-row"><span className="spinner" />불러오는 중...</div>
+      ) : notices.length === 0 ? (
+        <div className="empty-hint">등록된 공지사항이 없습니다.</div>
+      ) : notices.map((n) => (
+        <div className="notice-card" key={n.id}>
+          <div
+            className="notice-card-header"
+            onClick={() => setExpandedId(expandedId === n.id ? null : n.id)}
+          >
+            <div className="notice-card-title-row">
+              <span className="notice-card-title">{n.title}</span>
+              {n.file && <span className="notice-attach-icon" title="첨부파일 있음">📎</span>}
+            </div>
+            <div className="notice-card-meta">
+              <span>{n.poster}</span>
+              <span>{n.date}</span>
+              <span className="notice-expand-icon">{expandedId === n.id ? '▲' : '▼'}</span>
+            </div>
+          </div>
+
+          {expandedId === n.id && (
+            <div className="notice-card-body">
+              <p className="notice-card-content">{n.content}</p>
+              {n.file && (
+                <a
+                  className="notice-file-link"
+                  href={apiUrl(n.file.file_url)}
+                  target="_blank"
+                  rel="noreferrer"
+                  download={n.file.original_name}
+                >
+                  📎 {n.file.original_name}
+                  <span className="notice-file-size">
+                    ({Math.round((n.file.size_bytes || 0) / 1024)}KB)
+                  </span>
+                </a>
+              )}
+              {isAdmin && (
+                <button className="btn-danger-sm" onClick={() => handleDelete(n.id)}>
+                  삭제
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
     </section>
   );
 }
 
-function SavedItemCard({ item, appState }) {
-  const isFav = appState.favorites.includes(item.id);
-  const pdfUrl = item.pdf_url ? apiUrl(item.pdf_url) : null;
-  const pdfPage = item.pdf_page;
-  const viewerLink = pdfUrl ? pdfViewerLink(pdfUrl, pdfPage, item.title) : null;
+function NoticeForm({ currentUser, onSaved }) {
+  const [title, setTitle] = useState('');
+  const [content, setContent] = useState('');
+  const [poster, setPoster] = useState(currentUser?.name || '');
+  const [file, setFile] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!title.trim() || !content.trim()) { setError('제목과 내용을 입력해주세요.'); return; }
+    setSaving(true); setError('');
+    try {
+      const fd = new FormData();
+      fd.append('title', title.trim());
+      fd.append('content', content.trim());
+      fd.append('poster', poster.trim() || (currentUser?.name || '관리자'));
+      if (file) fd.append('file', file);
+      const res = await fetch(apiUrl('/api/notices'), {
+        method: 'POST',
+        headers: { 'X-Admin-Token': readAdminToken() },
+        body: fd,
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.detail || '등록 실패');
+        return;
+      }
+      onSaved();
+    } catch { setError('서버 오류가 발생했습니다.'); }
+    finally { setSaving(false); }
+  };
 
   return (
-    <div className="result-card">
-      <div className="card-meta">
-        <span>{item.category}</span>
-        {item.section && <span>{item.section}</span>}
-        {pdfPage && <span>p.{pdfPage}</span>}
-      </div>
-      <NavLink to={`/item/${item.id}`} className="card-title">{item.title}</NavLink>
-      <p className="card-summary">{item.summary}</p>
-      <div className="card-actions">
-        {viewerLink && (
-          <NavLink className="btn-pdf" to={viewerLink}>PDF 보기</NavLink>
-        )}
-        <button className={isFav ? 'btn-fav active' : 'btn-fav'} onClick={() => toggleFavorite(item.id, appState)}>
-          {isFav ? '★' : '☆'}
+    <div className="form-card">
+      <h3>공지 작성</h3>
+      <form onSubmit={handleSubmit} className="stack" style={{ gap: 10 }}>
+        <div>
+          <label className="field-label">제목 *</label>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="공지 제목" />
+        </div>
+        <div>
+          <label className="field-label">내용 *</label>
+          <textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            placeholder="공지 내용을 입력하세요"
+            rows={5}
+            style={{ width: '100%', resize: 'vertical' }}
+          />
+        </div>
+        <div>
+          <label className="field-label">게시자</label>
+          <input value={poster} onChange={(e) => setPoster(e.target.value)} placeholder="게시자 이름" />
+        </div>
+        <div>
+          <label className="field-label">첨부파일 (선택, 최대 20MB)</label>
+          <input
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png,.docx,.xlsx,.txt,.hwp"
+            onChange={(e) => setFile(e.target.files?.[0] || null)}
+          />
+          {file && <p className="settings-note">선택된 파일: {file.name}</p>}
+        </div>
+        {error && <p className="login-error">{error}</p>}
+        <button type="submit" className="btn-primary" disabled={saving}>
+          {saving ? '등록 중...' : '공지 등록'}
         </button>
-      </div>
+      </form>
     </div>
   );
 }
