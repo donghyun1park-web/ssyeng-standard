@@ -10,6 +10,8 @@ from urllib.parse import quote
 import httpx
 from dotenv import load_dotenv
 
+from app.services.external_settings import get_kcsc_api_key
+
 load_dotenv()
 
 
@@ -31,6 +33,10 @@ class ExternalStandardsAdapter:
     KCSC_FETCH_VIEWER_ON_SEARCH = os.getenv("KCSC_FETCH_VIEWER_ON_SEARCH", "false").strip().lower() in {"1", "true", "yes", "y"}
     KCSC_VIEWER_TYPES = {"KCS", "KDS", "EXCS", "SMCS"}
     KCSC_STANDARD_TYPES = ("KDS", "KCS", "NHCS", "SMCS", "EXCS", "KRCCS", "KRACS", "LHCS", "KWCS")
+
+    @staticmethod
+    def _kcsc_api_key() -> str:
+        return get_kcsc_api_key()
 
     LAW_SAMPLE = [
         {
@@ -76,7 +82,7 @@ class ExternalStandardsAdapter:
 
     def status(self) -> dict[str, Any]:
         law_configured = bool(self.LAW_API_BASE_URL and self.LAW_API_KEY)
-        kcsc_configured = bool(self.KCSC_API_BASE_URL and self.KCSC_API_KEY)
+        kcsc_configured = bool(self.KCSC_API_BASE_URL and self._kcsc_api_key())
         return {
             "ok": True,
             "phase": "6.1-kcsc-live-adapter",
@@ -150,7 +156,7 @@ class ExternalStandardsAdapter:
     ) -> dict[str, Any]:
         query = (query or "").strip()
         limit = self._safe_limit(limit)
-        if not self.KCSC_API_KEY:
+        if not self._kcsc_api_key():
             results = self._filter_samples(self.KCSC_SAMPLE, query, limit)
             results = self._decorate_kcsc_results(results, query, limit)
             return {"ok": True, "source": "kcsc", "mode": "sample-fallback", "query": query, "count": len(results), "items": results}
@@ -225,7 +231,7 @@ class ExternalStandardsAdapter:
     def get_kcsc_viewer(self, standard_type: str, code: str) -> dict[str, Any]:
         standard_type = (standard_type or "").strip().upper()
         code = (code or "").strip()
-        if not self.KCSC_API_KEY:
+        if not self._kcsc_api_key():
             return {
                 "ok": False,
                 "source": "kcsc",
@@ -448,14 +454,14 @@ class ExternalStandardsAdapter:
     def _kcsc_code_list(self) -> Any:
         url = f"{self._kcsc_root()}/CodeList"
         with httpx.Client(timeout=self.EXTERNAL_TIMEOUT_SECONDS, follow_redirects=True) as client:
-            response = client.get(url, params={"key": self.KCSC_API_KEY})
+            response = client.get(url, params={"key": self._kcsc_api_key()})
         response.raise_for_status()
         return response.json()
 
     def _kcsc_code_viewer(self, standard_type: str, code: str) -> Any:
         url = f"{self._kcsc_root()}/CodeViewer/{standard_type}/{code}"
         with httpx.Client(timeout=self.EXTERNAL_TIMEOUT_SECONDS, follow_redirects=True) as client:
-            response = client.get(url, params={"key": self.KCSC_API_KEY})
+            response = client.get(url, params={"key": self._kcsc_api_key()})
         response.raise_for_status()
         return response.json()
 

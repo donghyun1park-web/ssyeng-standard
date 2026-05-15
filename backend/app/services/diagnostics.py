@@ -10,6 +10,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from app.services.external_settings import get_kcsc_api_key
+
 load_dotenv()
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -105,7 +107,7 @@ class DiagnosticsService:
         return self._result("env_file", "ok", "backend/.env 파일 확인 완료")
 
     def _check_kcsc_config(self) -> dict[str, Any]:
-        key = os.getenv("KCSC_API_KEY", "").strip()
+        key = get_kcsc_api_key()
         if not key:
             return self._result("kcsc_api", "warning", "KCSC_API_KEY 미설정: 샘플 fallback으로 동작합니다.")
         if len(key) < 20:

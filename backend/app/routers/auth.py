@@ -8,6 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.services.admin_auth import require_admin_token
+from app.services.external_settings import (
+    ExternalSettingsUpdate,
+    external_settings_status,
+    update_external_settings,
+)
 
 router = APIRouter(tags=["auth"])
 
@@ -145,6 +150,16 @@ def verify_admin():
 def get_auth_data():
     data = _load()
     return {"ok": True, "users": data.get("users", []), "sites": data.get("sites", [])}
+
+
+@router.get("/admin/external-settings", dependencies=[Depends(require_admin_token)])
+def get_admin_external_settings():
+    return external_settings_status()
+
+
+@router.put("/admin/external-settings", dependencies=[Depends(require_admin_token)])
+def put_admin_external_settings(body: ExternalSettingsUpdate):
+    return update_external_settings(body)
 
 
 @router.post("/admin/auth-sites", status_code=201, dependencies=[Depends(require_admin_token)])

@@ -2007,20 +2007,23 @@ function AdminPage({ appState }) {
   const [status, setStatus] = useState(null);
   const [documents, setDocuments] = useState([]);
   const [authData, setAuthData] = useState({ users: [], sites: [] });
+  const [externalSettings, setExternalSettings] = useState(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [parseForm, setParseForm] = useState({ document_title: '', version: '', revision_date: '' });
 
   const load = async () => {
     try {
-      const [statusData, docsData, authDataResp] = await Promise.all([
+      const [statusData, docsData, authDataResp, externalSettingsResp] = await Promise.all([
         fetchJson('/api/rag/status'),
         fetchJson('/api/rag/documents'),
         fetchJson('/api/admin/auth-data'),
+        fetchJson('/api/admin/external-settings'),
       ]);
       setStatus(statusData);
       setDocuments(docsData.documents || []);
       setAuthData({ users: authDataResp.users || [], sites: authDataResp.sites || [] });
+      setExternalSettings(externalSettingsResp);
     } catch { setMessage('백엔드에 연결할 수 없습니다.'); }
   };
 
@@ -2084,6 +2087,7 @@ function AdminPage({ appState }) {
         <h2>데이터 관리</h2>
       </div>
 
+      <AdminExternalSettingsManager settings={externalSettings} onChanged={load} />
       <AdminSitesManager sites={authData.sites} onChanged={load} />
       <AdminUsersManager users={authData.users} onChanged={load} />
 
@@ -2131,6 +2135,86 @@ function AdminPage({ appState }) {
         ))}
       </div>
     </section>
+  );
+}
+
+function AdminExternalSettingsManager({ settings, onChanged }) {
+  const [draft, setDraft] = useState('');
+  const [reveal, setReveal] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const kcsc = settings?.kcsc || {};
+  const sourceLabel = {
+    custom: '관리자 설정',
+    env: 'Render 환경변수',
+    'bundled-default': '기본 탑재키',
+  }[kcsc.source] || '미설정';
+
+  const save = async () => {
+    if (!draft.trim()) {
+      setMessage('저장할 KCSC API 키를 입력하세요. 기본키로 되돌리려면 복구 버튼을 사용하세요.');
+      return;
+    }
+    setSaving(true); setMessage('');
+    try {
+      await fetchJson('/api/admin/external-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kcsc_api_key: draft.trim() }),
+      });
+      setDraft('');
+      setMessage('KCSC API 키를 저장했습니다.');
+      onChanged();
+    } catch (err) {
+      setMessage(`저장 실패: ${err.message}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const restoreDefault = async () => {
+    if (!window.confirm('관리자 설정 키를 지우고 기본 탑재 KCSC 키로 복구하시겠습니까?')) return;
+    setSaving(true); setMessage('');
+    try {
+      await fetchJson('/api/admin/external-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kcsc_api_key: '' }),
+      });
+      setDraft('');
+      setMessage('기본 탑재 KCSC 키로 복구했습니다.');
+      onChanged();
+    } catch (err) {
+      setMessage(`복구 실패: ${err.message}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="settings-card">
+      <h3>KCSC API 키 관리</h3>
+      <p className="settings-note">
+        현재 상태: <strong>{kcsc.configured ? '사용 가능' : '미설정'}</strong>
+        {kcsc.masked_key && <> · {kcsc.masked_key}</>}
+        {kcsc.source && <> · {sourceLabel}</>}
+      </p>
+      <div className="admin-inline-form">
+        <input
+          type={reveal ? 'text' : 'password'}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="새 KCSC API 키 입력"
+          autoComplete="off"
+        />
+        <button className="btn-primary" onClick={save} disabled={saving}>{saving ? '저장 중...' : '저장'}</button>
+      </div>
+      <div className="button-row">
+        <button className="btn-outline" onClick={() => setReveal((v) => !v)}>{reveal ? '숨기기' : '보기'}</button>
+        <button className="btn-outline" onClick={restoreDefault} disabled={saving}>기본키 복구</button>
+      </div>
+      {message && <div className={message.includes('실패') || message.includes('입력') ? 'error-box' : 'info-msg-box'}>{message}</div>}
+    </div>
   );
 }
 

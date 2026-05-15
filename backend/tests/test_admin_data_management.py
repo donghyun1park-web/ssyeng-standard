@@ -16,6 +16,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.main import app
 from app.routers import auth, notices, site_issues
+from app.services import external_settings
 
 
 class AdminDataManagementTest(unittest.TestCase):
@@ -25,6 +26,7 @@ class AdminDataManagementTest(unittest.TestCase):
         self.sites_path = Path(self.tmp.name) / "sites.json"
         self.notices_path = Path(self.tmp.name) / "notices.json"
         self.notice_files_dir = Path(self.tmp.name) / "notice_files"
+        self.external_settings_path = Path(self.tmp.name) / "external_settings.json"
         self.auth_path.write_text(
             json.dumps(
                 {
@@ -48,7 +50,9 @@ class AdminDataManagementTest(unittest.TestCase):
             patch.object(site_issues, "SITES_PATH", self.sites_path),
             patch.object(notices, "NOTICES_PATH", self.notices_path),
             patch.object(notices, "FILES_DIR", self.notice_files_dir),
-            patch.dict(os.environ, {"ADMIN_TOKEN": "secret"}, clear=False),
+            patch.object(external_settings, "SETTINGS_PATH", self.external_settings_path),
+            patch.object(external_settings, "DEFAULT_KCSC_API_KEY", "default-kcsc-key-1234567890"),
+            patch.dict(os.environ, {"ADMIN_TOKEN": "secret", "KCSC_API_KEY": ""}, clear=False),
         ]
         for item in self.patches:
             item.start()
@@ -88,6 +92,30 @@ class AdminDataManagementTest(unittest.TestCase):
         )
         self.assertEqual(login_resp.status_code, 200)
         self.assertTrue(login_resp.json()["user"]["can_manage_all"])
+
+    def test_admin_can_manage_kcsc_api_key_setting(self) -> None:
+        unauthorized = self.client.get("/api/admin/external-settings")
+        self.assertEqual(unauthorized.status_code, 401)
+
+        headers = {"X-Admin-Token": "secret"}
+        status = self.client.get("/api/admin/external-settings", headers=headers)
+        self.assertEqual(status.status_code, 200)
+        self.assertTrue(status.json()["kcsc"]["configured"])
+        self.assertEqual(status.json()["kcsc"]["source"], "bundled-default")
+
+        updated = self.client.put(
+            "/api/admin/external-settings",
+            headers=headers,
+            json={"kcsc_api_key": "custom-kcsc-key-1234567890"},
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["kcsc"]["source"], "custom")
+        self.assertTrue(updated.json()["kcsc"]["has_custom_key"])
+        self.assertNotIn("custom-kcsc-key-1234567890", str(updated.json()))
+
+        reset = self.client.put("/api/admin/external-settings", headers=headers, json={"kcsc_api_key": ""})
+        self.assertEqual(reset.status_code, 200)
+        self.assertEqual(reset.json()["kcsc"]["source"], "bundled-default")
 
     def test_master_site_user_and_checked_manager_can_manage_drawing_reviews(self) -> None:
         create_resp = self.client.post(
