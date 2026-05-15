@@ -466,6 +466,11 @@ function HomePage({ appState }) {
 
 // ── Search Page ───────────────────────────────────────────────────────────────
 
+// 모듈 레벨 캐시 — 컴포넌트 언마운트(PDF 보기 후 뒤로가기 등)에도 유지됨.
+// 페이지 새로고침 시 초기화된다.
+const _searchCache = new Map();
+// 구조: query -> { ai: aiState, kcsc: kcscState, rag: ragState }
+
 function filterLocalItems(items, query) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
@@ -478,11 +483,15 @@ function filterLocalItems(items, query) {
 function SearchPage({ appState }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialQ = (searchParams.get('q') || '').trim();
+
+  // 캐시에서 초기 상태 복원 (PDF 뷰어에서 돌아온 경우 재호출 방지)
+  const _cached0 = initialQ ? _searchCache.get(initialQ) : null;
+
   const [query, setQuery] = useState(initialQ);
-  const [submitted, setSubmitted] = useState(initialQ);
-  const [kcscState, setKcscState] = useState({ status: 'idle', items: [], error: '' });
-  const [aiState, setAiState] = useState({ status: 'idle', result: null, error: '' });
-  const [ragState, setRagState] = useState({ status: 'idle', items: [], error: '' });
+  const [submitted, setSubmitted] = useState(_cached0 ? initialQ : '');
+  const [kcscState, setKcscState] = useState(_cached0?.kcsc ?? { status: 'idle', items: [], error: '' });
+  const [aiState, setAiState]   = useState(_cached0?.ai   ?? { status: 'idle', result: null, error: '' });
+  const [ragState, setRagState] = useState(_cached0?.rag  ?? { status: 'idle', items: [], error: '' });
 
   const companyResults = useMemo(() => filterLocalItems(appState.items, submitted).slice(0, 8), [appState.items, submitted]);
 
@@ -493,9 +502,25 @@ function SearchPage({ appState }) {
     setQuery(q);
     if (searchParams.get('q') !== q) setSearchParams({ q }, { replace: true });
 
-    setKcscState({ status: 'loading', items: [], error: '' });
-    setAiState({ status: 'loading', result: null, error: '' });
-    setRagState({ status: 'loading', items: [], error: '' });
+    // 이미 캐시된 결과가 있으면 API 호출 없이 복원
+    if (_searchCache.has(q)) {
+      const hit = _searchCache.get(q);
+      setKcscState(hit.kcsc);
+      setAiState(hit.ai);
+      setRagState(hit.rag);
+      return;
+    }
+
+    const nextKcsc = { status: 'loading', items: [], error: '' };
+    const nextAi   = { status: 'loading', result: null, error: '' };
+    const nextRag  = { status: 'loading', items: [], error: '' };
+    setKcscState(nextKcsc);
+    setAiState(nextAi);
+    setRagState(nextRag);
+
+    // 캐시 수집용 — 세 요청이 각자 완료될 때마다 저장
+    const partial = { kcsc: nextKcsc, ai: nextAi, rag: nextRag };
+    const saveCache = () => _searchCache.set(q, { ...partial });
 
     fetchJson('/api/external/search', {
       method: 'POST',
@@ -503,25 +528,51 @@ function SearchPage({ appState }) {
       body: JSON.stringify({ query: q, sources: ['kcsc'], limit: 5 }),
     }).then((data) => {
       const kcsc = (data.items || []).filter((it) => (it.source || '').toLowerCase() === 'kcsc');
-      setKcscState({ status: 'ready', items: kcsc, error: '' });
-    }).catch(() => setKcscState({ status: 'error', items: [], error: 'KCSC 검색에 연결할 수 없습니다.' }));
+      const s = { status: 'ready', items: kcsc, error: '' };
+      partial.kcsc = s; setKcscState(s); saveCache();
+    }).catch(() => {
+      const s = { status: 'error', items: [], error: 'KCSC 검색에 연결할 수 없습니다.' };
+      partial.kcsc = s; setKcscState(s); saveCache();
+    });
 
     fetchJson('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: q, top_k: 5 }),
-    }).then((data) => setAiState({ status: 'ready', result: data, error: '' }))
-      .catch(() => setAiState({ status: 'error', result: null, error: 'AI 답변을 가져올 수 없습니다.' }));
+    }).then((data) => {
+      const s = { status: 'ready', result: data, error: '' };
+      partial.ai = s; setAiState(s); saveCache();
+    }).catch(() => {
+      const s = { status: 'error', result: null, error: 'AI 답변을 가져올 수 없습니다.' };
+      partial.ai = s; setAiState(s); saveCache();
+    });
 
     fetchJson(`/api/rag/search?q=${encodeURIComponent(q)}&limit=5`)
-      .then((data) => setRagState({ status: 'ready', items: data.results || [], error: '' }))
-      .catch(() => setRagState({ status: 'ready', items: [], error: '' }));
+      .then((data) => {
+        const s = { status: 'ready', items: data.results || [], error: '' };
+        partial.rag = s; setRagState(s); saveCache();
+      })
+      .catch(() => {
+        const s = { status: 'ready', items: [], error: '' };
+        partial.rag = s; setRagState(s); saveCache();
+      });
   }, [query, searchParams, setSearchParams]);
 
   useEffect(() => {
     const urlQ = (searchParams.get('q') || '').trim();
-    // 초기 마운트 시 또는 URL이 바뀌었을 때 항상 다시 검색 실행 (PDF 뷰어에서 돌아온 경우 포함)
-    if (urlQ.length >= 2 && (aiState.status === 'idle' || urlQ !== submitted)) {
+    if (urlQ.length < 2) return;
+    // 캐시가 있으면 상태만 복원하고 API 호출하지 않음
+    if (_searchCache.has(urlQ)) {
+      const hit = _searchCache.get(urlQ);
+      setSubmitted(urlQ);
+      setQuery(urlQ);
+      setKcscState(hit.kcsc);
+      setAiState(hit.ai);
+      setRagState(hit.rag);
+      return;
+    }
+    // 새 검색어일 때만 API 호출
+    if (urlQ !== submitted) {
       runSearch(urlQ);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -732,8 +783,6 @@ function AiAnswerPanel({ state, appState }) {
             {docRefs.length > 0 && (
               <div className="ai-refs">
                 {docRefs.map((ref) => {
-                  const pdfUrl = ref.pdf_url ? apiUrl(ref.pdf_url) : null;
-                  const viewerLink = pdfUrl ? pdfViewerLink(pdfUrl, ref.page_start, ref.document_title) : null;
                   const location = [ref.chapter, ref.section, ref.clause].filter(Boolean).join(' > ');
                   return (
                     <div key={ref.id} className="ai-ref-card">
@@ -743,9 +792,6 @@ function AiAnswerPanel({ state, appState }) {
                       </div>
                       {location && <p className="ref-location">{location}</p>}
                       {ref.page_start && <p className="ref-page">p.{ref.page_start}</p>}
-                      {viewerLink && (
-                        <NavLink className="btn-pdf" to={viewerLink}>PDF 보기</NavLink>
-                      )}
                     </div>
                   );
                 })}
