@@ -61,6 +61,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DIST_DIR = PROJECT_ROOT / "dist"
 if DIST_DIR.exists():
     app.mount("/assets", StaticFiles(directory=DIST_DIR / "assets"), name="assets")
+    if (DIST_DIR / "brand").exists():
+        app.mount("/brand", StaticFiles(directory=DIST_DIR / "brand"), name="brand")
+    if (DIST_DIR / "icons").exists():
+        app.mount("/icons", StaticFiles(directory=DIST_DIR / "icons"), name="icons")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def serve_spa(full_path: str):
