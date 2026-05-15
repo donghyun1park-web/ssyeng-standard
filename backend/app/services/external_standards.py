@@ -152,6 +152,7 @@ class ExternalStandardsAdapter:
         limit = self._safe_limit(limit)
         if not self.KCSC_API_KEY:
             results = self._filter_samples(self.KCSC_SAMPLE, query, limit)
+            results = self._decorate_kcsc_results(results, query, limit)
             return {"ok": True, "source": "kcsc", "mode": "sample-fallback", "query": query, "count": len(results), "items": results}
 
         try:
@@ -162,13 +163,14 @@ class ExternalStandardsAdapter:
 
             # KCSC 서버가 인증은 통과시키면서 모든 필드 null만 돌려주는 상태 감지
             if not normalized:
+                results = self._decorate_kcsc_results([], query, limit)
                 return {
                     "ok": True,
                     "source": "kcsc",
                     "mode": "live-api-empty",
                     "query": query,
-                    "count": 0,
-                    "items": [],
+                    "count": len(results),
+                    "items": results,
                     "raw_count": len(records),
                     "warning": (
                         "KCSC OpenAPI가 빈 응답을 반환했습니다. "
@@ -187,6 +189,7 @@ class ExternalStandardsAdapter:
                 date_to=date_to,
             )
             results = self._filter_kcsc_items(filtered, query, limit)
+            results = self._decorate_kcsc_results(results, query, limit)
 
             if self.KCSC_FETCH_VIEWER_ON_SEARCH:
                 results = [self._attach_kcsc_viewer(item) for item in results]
@@ -208,6 +211,7 @@ class ExternalStandardsAdapter:
             }
         except Exception as exc:  # keep app usable in the field even if API is temporarily unavailable
             results = self._filter_samples(self.KCSC_SAMPLE, query, limit)
+            results = self._decorate_kcsc_results(results, query, limit)
             return {
                 "ok": True,
                 "source": "kcsc",
@@ -570,6 +574,44 @@ class ExternalStandardsAdapter:
         if code:
             return f"https://www.kcsc.re.kr/standardCode/search?searchType=0&kcsc_cd={quote(str(code), safe='')}"
         return "https://www.kcsc.re.kr/standardCode/search?searchType=0&kcsc_cd="
+
+    @classmethod
+    def _kcsc_search_url(cls, query: str) -> str:
+        return f"https://www.kcsc.re.kr/standardCode/search?searchType=0&searchCnd=all&searchWrd={quote(str(query or ''), safe='')}"
+
+    @classmethod
+    def _kcsc_official_search_item(cls, query: str) -> dict[str, Any]:
+        clean = (query or "").strip()
+        url = cls._kcsc_search_url(clean)
+        encoded = quote(clean, safe="") or "ALL"
+        return {
+            "id": f"KCSC-OFFICIAL-SEARCH-{encoded}",
+            "source": "kcsc",
+            "title": f"KCSC 공식 검색: {clean}" if clean else "KCSC 공식 검색",
+            "category": "KCSC",
+            "summary": "KCSC API 키가 없거나 검색 결과가 비어 공식 KCSC 검색 페이지로 연결합니다.",
+            "body": "",
+            "reference": "KCSC official search",
+            "source_url": url,
+            "official_url": url,
+            "viewer_available": False,
+        }
+
+    @classmethod
+    def _decorate_kcsc_results(cls, results: list[dict[str, Any]], query: str, limit: int) -> list[dict[str, Any]]:
+        clean_query = (query or "").strip()
+        if not results and clean_query:
+            return [cls._kcsc_official_search_item(clean_query)]
+
+        decorated: list[dict[str, Any]] = []
+        fallback_url = cls._kcsc_search_url(clean_query) if clean_query else cls._kcsc_official_url({})
+        for item in results[:limit]:
+            enriched = dict(item)
+            source_url = enriched.get("source_url") or enriched.get("official_url") or fallback_url
+            enriched["source_url"] = source_url
+            enriched.setdefault("official_url", source_url)
+            decorated.append(enriched)
+        return decorated
 
     @classmethod
     def _viewer_body_from_payload(cls, payload: Any) -> str | None:

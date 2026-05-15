@@ -64,8 +64,6 @@ const STORAGE_KEYS = {
 
 const LAW_URL = 'https://www.law.go.kr/ais/main.do';
 
-const QUICK_TERMS = ['배관 지지', '보온 두께', '수압시험', '덕트 행거', '방화댐퍼', '배관 구배'];
-
 function readUserGeminiKey() {
   try { return (localStorage.getItem(STORAGE_KEYS.geminiUserKey) || '').trim(); } catch { return ''; }
 }
@@ -259,8 +257,7 @@ function LoginPage({ onLogin }) {
       <BrandStrip />
       <div className="login-card">
         <div className="login-logo">
-          <div className="logo-icon"><IcoWrench size={28} /></div>
-          <h1>설비 시공표준</h1>
+          <h1>쌍용건설 설비시공표준</h1>
           <div className="sub">이름과 사번으로 시작하세요</div>
         </div>
         <form onSubmit={handleSubmit} className="login-form">
@@ -451,7 +448,6 @@ function SwNotice({ appState }) {
 // ── Home Page ─────────────────────────────────────────────────────────────────
 
 function HomePage({ appState }) {
-  const navigate = useNavigate();
   const tiles = [
     { to: '/search',    Icon: IcoFileSearch,  title: '표준지침 검색',  desc: 'AI 답변 + 문서 검색' },
     { to: '/sites',     Icon: IcoClipboard2,  title: '현장이슈 공유',  desc: '현장별 도면검토 · 이슈' },
@@ -463,7 +459,7 @@ function HomePage({ appState }) {
       <div className="home-greet">
         {appState.currentUser ? `안녕하세요, ${appState.currentUser.name}님` : '안녕하세요'}
       </div>
-      <div className="home-title">설비 시공표준</div>
+      <div className="home-title">쌍용건설 설비시공표준</div>
 
       <div className="home-grid">
         {tiles.map(({ to, Icon, title, desc }) => (
@@ -482,17 +478,6 @@ function HomePage({ appState }) {
         </div>
         <IcoExtLink size={16} />
       </a>
-
-      <div style={{ marginTop: 22 }}>
-        <div className="eyebrow" style={{ marginBottom: 10 }}>자주 찾는 항목</div>
-        <div className="quick-chips">
-          {QUICK_TERMS.map((term) => (
-            <button key={term} className="chip" onClick={() => navigate(`/search?q=${encodeURIComponent(term)}`)}>
-              {term}
-            </button>
-          ))}
-        </div>
-      </div>
 
       {!appState.networkOnline && (
         <div className="offline-notice">오프라인 상태 · 로컬 기준으로 동작합니다.</div>
@@ -627,12 +612,7 @@ function SearchPage({ appState }) {
       <form className="search-form" onSubmit={(e) => { e.preventDefault(); runSearch(); }}>
         <div className="search-row">
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="예: 배관 지지 기준, 보온 두께" autoFocus />
-          <button type="submit" disabled={query.trim().length < 2}>검색</button>
-        </div>
-        <div className="quick-chips">
-          {QUICK_TERMS.map((term) => (
-            <button type="button" key={term} className="chip" onClick={() => runSearch(term)}>{term}</button>
-          ))}
+          <button className="search-submit" type="submit" disabled={query.trim().length < 2}>검색</button>
         </div>
       </form>
 
@@ -775,6 +755,7 @@ function RagChunkCard({ chunk }) {
 }
 
 function KcscCard({ item }) {
+  const sourceUrl = item.source_url || item.official_url;
   return (
     <div className="result-card kcsc-card">
       <div className="card-meta">
@@ -784,9 +765,9 @@ function KcscCard({ item }) {
       </div>
       <strong className="card-title">{item.title}</strong>
       {item.summary && <p className="card-summary">{item.summary}</p>}
-      {item.source_url && (
+      {sourceUrl && (
         <div className="card-actions">
-          <a className="btn-outline" href={item.source_url} target="_blank" rel="noreferrer">원문 보기 ↗</a>
+          <a className="btn-outline" href={sourceUrl} target="_blank" rel="noreferrer">원문 보기 ↗</a>
         </div>
       )}
     </div>
@@ -817,7 +798,7 @@ function AiAnswerPanel({ state, appState }) {
               <div className="notice warning">외부 AI 호출 실패로 로컬 근거 요약을 표시했습니다.</div>
             )}
             <pre className="ai-answer-text">{result.answer}</pre>
-            <p className="ai-disclaimer">AI 답변은 참고용으로 활용하세요. PDF 원문을 반드시 확인하세요.</p>
+            <p className="ai-disclaimer">AI 답변은 참고용으로 활용하세요.</p>
             {docRefs.length > 0 && (
               <div className="ai-refs">
                 {docRefs.map((ref) => {
@@ -829,7 +810,6 @@ function AiAnswerPanel({ state, appState }) {
                         {ref.version && <span>{ref.version}</span>}
                       </div>
                       {location && <p className="ref-location">{location}</p>}
-                      {ref.page_start && <p className="ref-page">p.{ref.page_start}</p>}
                     </div>
                   );
                 })}
