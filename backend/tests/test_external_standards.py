@@ -58,6 +58,25 @@ class ExternalStandardsAdapterKcscTest(unittest.TestCase):
             self.assertEqual(item["source"], "kcsc")
             self.assertTrue(item.get("source_url") or item.get("official_url"))
 
+    def test_kcsc_result_source_url_prefers_search_page_over_viewer_url(self) -> None:
+        result = ExternalStandardsAdapter._decorate_kcsc_results(
+            [
+                {
+                    "id": "KCS-31-20-15",
+                    "source": "kcsc",
+                    "code": "KCS 31 20 15",
+                    "title": "기계설비 배관공사",
+                    "official_url": "https://www.kcsc.re.kr/StandardCode/Viewer/12345",
+                }
+            ],
+            "배관",
+            limit=5,
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertIn("kcsc.re.kr/standardCode/search", result[0]["source_url"])
+        self.assertNotIn("/Viewer/", result[0]["source_url"])
+
 
 if __name__ == "__main__":
     unittest.main()

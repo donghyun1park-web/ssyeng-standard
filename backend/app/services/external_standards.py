@@ -586,6 +586,18 @@ class ExternalStandardsAdapter:
         return f"https://www.kcsc.re.kr/standardCode/search?searchType=0&searchCnd=all&searchWrd={quote(str(query or ''), safe='')}"
 
     @classmethod
+    def _kcsc_result_url(cls, item: dict[str, Any], query: str) -> str:
+        keyword = (
+            item.get("full_code")
+            or item.get("code")
+            or item.get("list_code")
+            or item.get("title")
+            or query
+            or ""
+        )
+        return cls._kcsc_search_url(str(keyword))
+
+    @classmethod
     def _kcsc_official_search_item(cls, query: str) -> dict[str, Any]:
         clean = (query or "").strip()
         url = cls._kcsc_search_url(clean)
@@ -613,7 +625,7 @@ class ExternalStandardsAdapter:
         fallback_url = cls._kcsc_search_url(clean_query) if clean_query else cls._kcsc_official_url({})
         for item in results[:limit]:
             enriched = dict(item)
-            source_url = enriched.get("source_url") or enriched.get("official_url") or fallback_url
+            source_url = enriched.get("source_url") or cls._kcsc_result_url(enriched, clean_query) or fallback_url
             enriched["source_url"] = source_url
             enriched.setdefault("official_url", source_url)
             decorated.append(enriched)

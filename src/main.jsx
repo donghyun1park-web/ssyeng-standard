@@ -644,10 +644,7 @@ function SearchPage({ appState }) {
         <div className="empty-hint">검색어를 입력하면 회사 표준지침을 먼저 보여드립니다.</div>
       ) : (
         <>
-          {/* 1순위: AI 답변 */}
-          <AiAnswerPanel state={aiState} appState={appState} />
-
-          {/* 2순위: 회사 표준지침 (JSON + 인덱싱된 PDF 통합) */}
+          {/* 1순위: 회사 표준지침 (JSON + 인덱싱된 PDF 통합) */}
           <SearchSection title="회사 표준지침" tag="내부 기준" priority={1}>
             {companyResults.length === 0 && ragState.items.length === 0 && ragState.status !== 'loading' ? (
               <div className="section-empty">
@@ -670,7 +667,7 @@ function SearchPage({ appState }) {
             )}
           </SearchSection>
 
-          {/* 3순위: KCSC 참고 기준 */}
+          {/* 2순위: KCSC 참고 기준 */}
           <SearchSection title="KCSC 참고 기준" tag="국가건설기준센터" priority={2} note="KCSC는 참고 기준입니다. 현장 적용은 회사 표준지침과 계약도서를 우선 확인하세요.">
             {kcscState.status === 'loading' ? (
               <div className="loading-row"><span className="spinner" />검색 중...</div>
@@ -688,6 +685,9 @@ function SearchPage({ appState }) {
             <span>법제처 AI 법령검색 바로가기</span>
             <span>법령은 공식 사이트에서 확인 ↗</span>
           </a>
+
+          {/* 최하단: AI 답변 */}
+          <AiAnswerPanel state={aiState} appState={appState} />
         </>
       )}
     </section>
