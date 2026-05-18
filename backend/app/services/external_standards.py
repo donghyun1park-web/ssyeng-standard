@@ -575,42 +575,36 @@ class ExternalStandardsAdapter:
     @classmethod
     def _kcsc_official_url(cls, raw: dict[str, Any], code: str | None = None) -> str:
         """
-        KCSC SPA 실제 라우트 (main.b2d4f321.js 분석, 2026-05 확인):
-          STANDARD_CODE_SEARCH      = "/standardCode/search"
-          STANDARD_CODE_VIEWER_LINK = "/standardCode/viewer/:linkedDocCode"
+        KCSC '원문 보기' URL — 검색 결과에 항목이 정확히 표시되도록 한다.
 
-        본문 뷰어 URL 빌더 (SPA 내부 코드):
-          "/standardCode/viewer/" + t.kcscCd + ":" + t.rvsnYmd
-          → 즉 linkedDocCode = "{kcsc_cd}:{개정일}" 결합 형식
+        문제: KCSC OpenAPI가 반환하는 fullCode(예 '2020312015')는 KCSC 공개 사이트의
+        kcsc_cd 형식과 일치하지 않아 코드로 검색하면 0건이 나옴.
+
+        해결: 문서명(name/title)을 검색어로 사용 → KCSC가 자연어 검색으로 해당 표준을
+        정확히 찾아 결과 리스트 상단에 표시. 사용자는 한 번 클릭으로 본문 진입 가능.
 
         우선순위:
-          1. kcsc_cd + rvsn_ymd 둘 다 있으면 → 직접 본문 뷰어 URL
-          2. code만 있으면 → 검색 URL (kcsc_cd 파라미터로 자동 검색)
-          3. 둘 다 없으면 → 빈 검색 페이지
+          1. 문서명(title)이 있으면 → /standardCode/search?...&kcsc_cd={제목}
+             (KCSC SPA의 kcsc_cd 파라미터는 일반 검색어로도 동작)
+          2. 명시적 code만 있으면 → kcsc_cd={code}
+          3. 비어있으면 → 빈 검색 페이지
         """
-        # raw 데이터에서 kcsc 코드와 개정일 추출
-        kcsc_cd = cls._first(raw, [
+        # 문서명 우선 (검색 매칭률이 가장 높음)
+        title = cls._first(raw, [
+            "name", "title", "stdName", "codeName", "korName", "standardName", "docNm",
+        ])
+        if title:
+            keyword = str(title).strip()
+            if keyword:
+                return f"https://www.kcsc.re.kr/standardCode/search?searchType=&kcsc_cd={quote(keyword, safe='')}"
+
+        # 명시적 코드 fallback
+        fallback_code = cls._first(raw, [
             "kcscCd", "kcsc_cd", "docCode", "doc_code",
             "fullCode", "standardCode", "stdFullCode",
-            "code", "stdCode",
         ]) or code
-
-        rvsn_ymd = cls._first(raw, [
-            "rvsnYmd", "rvsn_ymd",
-            "revisionDate", "noticeDate", "announceDate", "enforcementDate",
-            "updateDate", "updDate",
-        ])
-
-        # 1순위: 본문 뷰어 직접 URL (가장 정확)
-        if kcsc_cd and rvsn_ymd:
-            # 개정일 정규화: "2024-01-15T00:00:00" → "2024-01-15"
-            ymd_clean = str(rvsn_ymd).split("T")[0].strip()
-            linked = f"{kcsc_cd}:{ymd_clean}"
-            return f"https://www.kcsc.re.kr/standardCode/viewer/{quote(linked, safe=':')}"
-
-        # 2순위: 검색 URL — SPA가 kcsc_cd 파라미터로 자동 검색
-        if kcsc_cd:
-            return f"https://www.kcsc.re.kr/standardCode/search?searchType=&kcsc_cd={quote(str(kcsc_cd), safe='')}"
+        if fallback_code:
+            return f"https://www.kcsc.re.kr/standardCode/search?searchType=&kcsc_cd={quote(str(fallback_code), safe='')}"
 
         return "https://www.kcsc.re.kr/standardCode/search?searchType=&kcsc_cd="
 
