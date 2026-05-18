@@ -1,0 +1,26 @@
+name: Keep Render Alive
+
+# Render 무료 플랜은 15분 비활성 시 자동 슬립.
+# 14분마다 헬스체크 ping을 보내 슬립을 방지합니다.
+
+on:
+  schedule:
+    - cron: '*/14 * * * *'   # 매 14분마다 실행
+  workflow_dispatch:          # 수동 실행 버튼 (테스트용)
+
+jobs:
+  ping:
+    name: Ping health endpoint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /api/health
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 30 \
+            https://ssyeng-standard.onrender.com/api/health)
+          echo "HTTP status: $STATUS"
+          if [ "$STATUS" = "200" ]; then
+            echo "Service is alive."
+          else
+            echo "Service returned $STATUS — may be warming up (expected on first ping after sleep)."
+          fi
