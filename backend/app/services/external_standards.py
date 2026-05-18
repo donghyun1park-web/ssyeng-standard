@@ -617,11 +617,13 @@ class ExternalStandardsAdapter:
 
     @classmethod
     def _kcsc_result_url(cls, item: dict[str, Any], query: str) -> str:
+        # 문서명(title)을 최우선 — KCSC가 자연어 검색으로 정확히 매칭함.
+        # 코드(fullCode 등 순수 숫자)는 KCSC 공개 사이트와 형식이 안 맞아 0건 반환됨.
         keyword = (
-            item.get("full_code")
+            item.get("title")
+            or item.get("full_code")
             or item.get("code")
             or item.get("list_code")
-            or item.get("title")
             or query
             or ""
         )
