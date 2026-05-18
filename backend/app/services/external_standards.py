@@ -574,16 +574,27 @@ class ExternalStandardsAdapter:
 
     @classmethod
     def _kcsc_official_url(cls, raw: dict[str, Any], code: str | None = None) -> str:
-        viewer_no = cls._first(raw, ["no", "seq", "viewerNo", "standardNo", "standardSeq"])
+        """
+        KCSC SPA 라우트 (2026-05 확인):
+          /standardCode/list                — 목록/검색
+          /standardCode/list/:listCode      — 카테고리 필터
+          /standardCode/detail              — 상세
+          /standardCode/viewer/:linkedDocCd — 본문 뷰어 (소문자!)
+        """
+        viewer_no = cls._first(raw, ["no", "seq", "viewerNo", "standardNo", "standardSeq", "linkedDocCd"])
         if viewer_no:
-            return f"https://www.kcsc.re.kr/StandardCode/Viewer/{quote(str(viewer_no), safe='')}"
+            return f"https://www.kcsc.re.kr/standardCode/viewer/{quote(str(viewer_no), safe='')}"
         if code:
-            return f"https://www.kcsc.re.kr/standardCode/search?searchType=0&kcsc_cd={quote(str(code), safe='')}"
-        return "https://www.kcsc.re.kr/standardCode/search?searchType=0&kcsc_cd="
+            # 코드(KCS 31 25 15 등)로 검색
+            return f"https://www.kcsc.re.kr/standardCode/list?searchKeyword={quote(str(code), safe='')}"
+        return "https://www.kcsc.re.kr/standardCode/list"
 
     @classmethod
     def _kcsc_search_url(cls, query: str) -> str:
-        return f"https://www.kcsc.re.kr/standardCode/search?kcsc_cd={quote(str(query or ''), safe='')}"
+        # SPA 검색 페이지 — searchKeyword 파라미터로 검색어 전달
+        if query:
+            return f"https://www.kcsc.re.kr/standardCode/list?searchKeyword={quote(str(query), safe='')}"
+        return "https://www.kcsc.re.kr/standardCode/list"
 
     @classmethod
     def _kcsc_result_url(cls, item: dict[str, Any], query: str) -> str:
