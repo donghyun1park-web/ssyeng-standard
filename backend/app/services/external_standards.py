@@ -575,26 +575,51 @@ class ExternalStandardsAdapter:
     @classmethod
     def _kcsc_official_url(cls, raw: dict[str, Any], code: str | None = None) -> str:
         """
-        KCSC SPA 라우트 (2026-05 확인):
-          /standardCode/list                — 목록/검색
-          /standardCode/list/:listCode      — 카테고리 필터
-          /standardCode/detail              — 상세
-          /standardCode/viewer/:linkedDocCd — 본문 뷰어 (소문자!)
+        KCSC SPA 실제 라우트 (main.b2d4f321.js 분석, 2026-05 확인):
+          STANDARD_CODE_SEARCH      = "/standardCode/search"
+          STANDARD_CODE_VIEWER_LINK = "/standardCode/viewer/:linkedDocCode"
+
+        본문 뷰어 URL 빌더 (SPA 내부 코드):
+          "/standardCode/viewer/" + t.kcscCd + ":" + t.rvsnYmd
+          → 즉 linkedDocCode = "{kcsc_cd}:{개정일}" 결합 형식
+
+        우선순위:
+          1. kcsc_cd + rvsn_ymd 둘 다 있으면 → 직접 본문 뷰어 URL
+          2. code만 있으면 → 검색 URL (kcsc_cd 파라미터로 자동 검색)
+          3. 둘 다 없으면 → 빈 검색 페이지
         """
-        viewer_no = cls._first(raw, ["no", "seq", "viewerNo", "standardNo", "standardSeq", "linkedDocCd"])
-        if viewer_no:
-            return f"https://www.kcsc.re.kr/standardCode/viewer/{quote(str(viewer_no), safe='')}"
-        if code:
-            # 코드(KCS 31 25 15 등)로 검색
-            return f"https://www.kcsc.re.kr/standardCode/list?searchKeyword={quote(str(code), safe='')}"
-        return "https://www.kcsc.re.kr/standardCode/list"
+        # raw 데이터에서 kcsc 코드와 개정일 추출
+        kcsc_cd = cls._first(raw, [
+            "kcscCd", "kcsc_cd", "docCode", "doc_code",
+            "fullCode", "standardCode", "stdFullCode",
+            "code", "stdCode",
+        ]) or code
+
+        rvsn_ymd = cls._first(raw, [
+            "rvsnYmd", "rvsn_ymd",
+            "revisionDate", "noticeDate", "announceDate", "enforcementDate",
+            "updateDate", "updDate",
+        ])
+
+        # 1순위: 본문 뷰어 직접 URL (가장 정확)
+        if kcsc_cd and rvsn_ymd:
+            # 개정일 정규화: "2024-01-15T00:00:00" → "2024-01-15"
+            ymd_clean = str(rvsn_ymd).split("T")[0].strip()
+            linked = f"{kcsc_cd}:{ymd_clean}"
+            return f"https://www.kcsc.re.kr/standardCode/viewer/{quote(linked, safe=':')}"
+
+        # 2순위: 검색 URL — SPA가 kcsc_cd 파라미터로 자동 검색
+        if kcsc_cd:
+            return f"https://www.kcsc.re.kr/standardCode/search?searchType=&kcsc_cd={quote(str(kcsc_cd), safe='')}"
+
+        return "https://www.kcsc.re.kr/standardCode/search?searchType=&kcsc_cd="
 
     @classmethod
     def _kcsc_search_url(cls, query: str) -> str:
-        # SPA 검색 페이지 — searchKeyword 파라미터로 검색어 전달
+        # SPA 내부와 동일한 빌더 — searchType=(빈값), kcsc_cd=(검색어)
         if query:
-            return f"https://www.kcsc.re.kr/standardCode/list?searchKeyword={quote(str(query), safe='')}"
-        return "https://www.kcsc.re.kr/standardCode/list"
+            return f"https://www.kcsc.re.kr/standardCode/search?searchType=&kcsc_cd={quote(str(query), safe='')}"
+        return "https://www.kcsc.re.kr/standardCode/search?searchType=&kcsc_cd="
 
     @classmethod
     def _kcsc_result_url(cls, item: dict[str, Any], query: str) -> str:
