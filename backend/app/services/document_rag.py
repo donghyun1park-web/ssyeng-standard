@@ -354,6 +354,7 @@ class DocumentRagStore:
             temp.unlink(missing_ok=True)
 
     def search(self, query: str, *, limit: int = 5) -> list[dict]:
+        """검색어 매칭 정밀도 우선 — TF-IDF + 매칭률 + 구문 인접성 가산."""
         q_tokens = _tokenize(query)
         if not q_tokens:
             return []
@@ -363,17 +364,40 @@ class DocumentRagStore:
             return []
 
         q_counter = Counter(q_tokens)
+        q_unique = list(q_counter.keys())
+        n_q_unique = len(q_unique)
+
         doc_freq: Counter[str] = Counter()
         for chunk in chunks:
             doc_freq.update(set(chunk.get("tokens", [])))
         n_docs = max(1, len(chunks))
 
-        scored: list[tuple[float, dict]] = []
+        # 검색 구문 — phrase / bigram 매칭용
+        query_phrase = re.sub(r"\s+", " ", query.strip().lower())
+        bigrams = [
+            f"{q_tokens[i]} {q_tokens[i + 1]}".lower()
+            for i in range(len(q_tokens) - 1)
+        ]
+
+        # (matched_count, score, payload) — 1순위: 매칭 토큰 수, 2순위: TF-IDF 점수
+        scored: list[tuple[int, float, dict]] = []
         for chunk in chunks:
             tokens = chunk.get("tokens", [])
             if not tokens:
                 continue
             counter = Counter(tokens)
+            text_lower = chunk.get("text", "").lower()
+
+            # 1. 검색어 토큰 중 청크에 등장한 수
+            matched = sum(1 for t in q_unique if counter.get(t, 0) or t in text_lower)
+            if matched == 0:
+                continue
+
+            # 2. 다중 검색어일 때, 매칭 토큰이 1개뿐이면 제외 (관련성 낮음)
+            if n_q_unique >= 3 and matched < 2:
+                continue
+
+            # 3. 기본 TF-IDF 점수 (정렬 보조)
             score = 0.0
             for token, q_weight in q_counter.items():
                 tf = counter.get(token, 0)
@@ -381,16 +405,24 @@ class DocumentRagStore:
                     continue
                 idf = math.log((n_docs + 1) / (doc_freq[token] + 1)) + 1.0
                 score += (1.0 + math.log(tf)) * idf * q_weight
-            joined_text = chunk.get("text", "").lower()
-            for token in q_tokens:
-                if token in joined_text:
-                    score += 0.3
+
+            # 4. 구문 인접성 보너스
+            if n_q_unique >= 2 and query_phrase and query_phrase in text_lower:
+                score *= 4.0  # 전체 구문 정확히 등장
+            elif bigrams:
+                bigram_hits = sum(1 for bg in bigrams if bg in text_lower)
+                if bigram_hits > 0:
+                    score *= 1.0 + 0.6 * bigram_hits  # 인접 2-그램 1개당 ×1.6
+
             if score > 0:
                 payload = {k: v for k, v in chunk.items() if k != "tokens"}
                 payload["score"] = round(score, 4)
-                scored.append((score, payload))
-        scored.sort(key=lambda item: item[0], reverse=True)
-        return [payload for _, payload in scored[:limit]]
+                payload["matched_terms"] = matched
+                scored.append((matched, score, payload))
+
+        # 정렬: 매칭 토큰 수(많은 순) → TF-IDF 점수(높은 순)
+        scored.sort(key=lambda x: (-x[0], -x[1]))
+        return [payload for _, _, payload in scored[:limit]]
 
     def build_context(self, chunks: Iterable[dict]) -> str:
         blocks = []
