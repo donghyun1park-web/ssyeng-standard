@@ -9,6 +9,8 @@ from typing import Literal
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from app.utils.json_store import load_json, save_json
+
 router = APIRouter(tags=["checklists"])
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -105,31 +107,19 @@ def _resolve_site(site_id: str | None) -> str:
 
 
 def _load_items() -> dict:
-    if not ITEMS_PATH.exists():
-        return {"items": []}
-    try:
-        return json.loads(ITEMS_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {"items": []}
+    return load_json(ITEMS_PATH, default={"items": []})
 
 
 def _save_items(data: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    ITEMS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_json(ITEMS_PATH, data)
 
 
 def _load_records() -> dict:
-    if not RECORDS_PATH.exists():
-        return {"records": []}
-    try:
-        return json.loads(RECORDS_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {"records": []}
+    return load_json(RECORDS_PATH, default={"records": []})
 
 
 def _save_records(data: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    RECORDS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_json(RECORDS_PATH, data)
 
 
 def _site_items(site_id: str, trade: str | None = None) -> list[dict]:

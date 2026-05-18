@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 
 from app.routers.auth import is_manager_user
 from app.services.admin_auth import has_valid_admin_token
+from app.utils.json_store import load_json, save_json
 
 router = APIRouter(tags=["notices"])
 
@@ -27,17 +28,11 @@ def _now() -> str:
 
 
 def _load() -> dict:
-    if not NOTICES_PATH.exists():
-        return {"notices": []}
-    try:
-        return json.loads(NOTICES_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {"notices": []}
+    return load_json(NOTICES_PATH, default={"notices": []})
 
 
 def _save(data: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    NOTICES_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_json(NOTICES_PATH, data)
 
 
 def _decode_header(value: str | None) -> str:

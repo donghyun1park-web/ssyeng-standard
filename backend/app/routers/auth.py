@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.services.admin_auth import require_admin_token
+from app.utils.json_store import load_json, save_json
 from app.services.external_settings import (
     ExternalSettingsUpdate,
     external_settings_status,
@@ -51,17 +52,12 @@ def _normalize(data: dict, *, include_defaults: bool = False) -> dict:
 
 
 def _load() -> dict:
-    if not AUTH_PATH.exists():
-        return _normalize({"users": [], "sites": []}, include_defaults=True)
-    try:
-        return _normalize(json.loads(AUTH_PATH.read_text(encoding="utf-8")))
-    except Exception:
-        return _normalize({"users": [], "sites": []}, include_defaults=True)
+    raw = load_json(AUTH_PATH, default={"users": [], "sites": []})
+    return _normalize(raw, include_defaults=not AUTH_PATH.exists())
 
 
 def _save(data: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    AUTH_PATH.write_text(json.dumps(_normalize(data), ensure_ascii=False, indent=2), encoding="utf-8")
+    save_json(AUTH_PATH, _normalize(data))
 
 
 def _find_user(users: list[dict], name: str, sabun: str) -> dict | None:

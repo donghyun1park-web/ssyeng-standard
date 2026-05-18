@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from app.utils.json_store import save_json
+
 try:
     from pypdf import PdfReader
 except Exception:  # pragma: no cover
@@ -226,7 +228,7 @@ class DocumentRagStore:
 
     def _save(self, data: dict) -> None:
         data["updated_at"] = _now_iso()
-        self.index_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        save_json(self.index_path, data)
 
     def status(self) -> dict:
         data = self._load()

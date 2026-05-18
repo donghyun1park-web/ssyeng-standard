@@ -7,6 +7,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from app.utils.json_store import load_json, save_json
+
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 SETTINGS_PATH = DATA_DIR / "external_settings.json"
@@ -21,17 +23,11 @@ class ExternalSettingsUpdate(BaseModel):
 
 
 def _load() -> dict[str, Any]:
-    if not SETTINGS_PATH.exists():
-        return {}
-    try:
-        return json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    return load_json(SETTINGS_PATH, default={})
 
 
 def _save(data: dict[str, Any]) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    SETTINGS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_json(SETTINGS_PATH, data)
 
 
 def _mask(value: str) -> str:

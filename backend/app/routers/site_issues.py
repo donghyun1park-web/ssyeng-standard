@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.routers.auth import get_auth_sites, is_known_user, is_manager_user
 from app.services.admin_auth import has_valid_admin_token, require_admin_token
+from app.utils.json_store import load_json, save_json
 
 router = APIRouter(tags=["site-issues"])
 
@@ -24,17 +25,11 @@ def _now() -> str:
 
 
 def _load() -> dict:
-    if not SITES_PATH.exists():
-        return {"sites": [], "drawing_reviews": [], "site_issues": []}
-    try:
-        return json.loads(SITES_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {"sites": [], "drawing_reviews": [], "site_issues": []}
+    return load_json(SITES_PATH, default={"sites": [], "drawing_reviews": [], "site_issues": []})
 
 
 def _save(data: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    SITES_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_json(SITES_PATH, data)
 
 
 def _decode_header(value: str | None) -> str:
