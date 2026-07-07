@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Iterable
 
 from app.utils.json_store import save_json
+from app.services.synonyms import synonym_terms
 
 try:
     from pypdf import PdfReader
@@ -354,7 +355,7 @@ class DocumentRagStore:
             temp.unlink(missing_ok=True)
 
     def search(self, query: str, *, limit: int = 5) -> list[dict]:
-        """검색어 매칭 정밀도 우선 — TF-IDF + 매칭률 + 구문 인접성 가산."""
+        """검색어 매칭 정밀도 우선 — TF-IDF + 매칭률 + 구문 인접성 + 동의어 확장."""
         q_tokens = _tokenize(query)
         if not q_tokens:
             return []
@@ -366,6 +367,17 @@ class DocumentRagStore:
         q_counter = Counter(q_tokens)
         q_unique = list(q_counter.keys())
         n_q_unique = len(q_unique)
+
+        # 동의어 확장 토큰 — 보조 점수(0.5 가중)로만 사용, matched 산정에는 미포함
+        syn_tokens = [t for t in synonym_terms(q_unique) if t not in q_counter]
+
+        # 서브토큰 폴백: 단일 붙임 토큰(예: '배관지지')일 때 2글자 슬라이딩 분해로
+        # '배관'·'지지' 같은 부분 매칭을 보조 점수로 잡는다.
+        sub_tokens: list[str] = []
+        if n_q_unique == 1:
+            solo = q_unique[0]
+            if len(solo) >= 4 and re.fullmatch(r"[가-힣]+", solo):
+                sub_tokens = [solo[i:i + 2] for i in range(len(solo) - 1)]
 
         doc_freq: Counter[str] = Counter()
         for chunk in chunks:
@@ -388,16 +400,21 @@ class DocumentRagStore:
             counter = Counter(tokens)
             text_lower = chunk.get("text", "").lower()
 
-            # 1. 검색어 토큰 중 청크에 등장한 수
+            # 1. 검색어(원본) 토큰 중 청크에 등장한 수 — 정렬 1순위 기준
             matched = sum(1 for t in q_unique if counter.get(t, 0) or t in text_lower)
-            if matched == 0:
+
+            # 동의어 매칭 여부 (원본이 하나도 안 맞은 청크를 구제하기 위함)
+            syn_matched = sum(1 for t in syn_tokens if counter.get(t, 0) or t in text_lower)
+            sub_matched = sum(1 for t in sub_tokens if t in text_lower)
+
+            if matched == 0 and syn_matched == 0 and sub_matched == 0:
                 continue
 
-            # 2. 다중 검색어일 때, 매칭 토큰이 1개뿐이면 제외 (관련성 낮음)
-            if n_q_unique >= 3 and matched < 2:
+            # 2. 다중 검색어일 때, 원본·동의어 통틀어 1개뿐이면 제외 (관련성 낮음)
+            if n_q_unique >= 3 and (matched + min(syn_matched, 1)) < 2:
                 continue
 
-            # 3. 기본 TF-IDF 점수 (정렬 보조)
+            # 3. 기본 TF-IDF 점수 (정렬 보조) — 원본 토큰
             score = 0.0
             for token, q_weight in q_counter.items():
                 tf = counter.get(token, 0)
@@ -405,6 +422,18 @@ class DocumentRagStore:
                     continue
                 idf = math.log((n_docs + 1) / (doc_freq[token] + 1)) + 1.0
                 score += (1.0 + math.log(tf)) * idf * q_weight
+
+            # 3-1. 동의어 토큰 — 0.5 가중으로 가산
+            for token in syn_tokens:
+                tf = counter.get(token, 0)
+                if not tf:
+                    continue
+                idf = math.log((n_docs + 1) / (doc_freq[token] + 1)) + 1.0
+                score += 0.5 * (1.0 + math.log(tf)) * idf
+
+            # 3-2. 서브토큰(붙임 검색어 분해) — 0.3 가중, 텍스트 포함 여부만
+            if sub_tokens:
+                score += 0.3 * sub_matched
 
             # 4. 구문 인접성 보너스
             if n_q_unique >= 2 and query_phrase and query_phrase in text_lower:
@@ -418,6 +447,7 @@ class DocumentRagStore:
                 payload = {k: v for k, v in chunk.items() if k != "tokens"}
                 payload["score"] = round(score, 4)
                 payload["matched_terms"] = matched
+                # 원본 매칭 수 우선, 동의어만 맞은 청크는 그 아래로 (matched 0)
                 scored.append((matched, score, payload))
 
         # 정렬: 매칭 토큰 수(많은 순) → TF-IDF 점수(높은 순)

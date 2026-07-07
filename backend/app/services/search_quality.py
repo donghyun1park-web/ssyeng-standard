@@ -7,24 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from app.services.standard_repository import StandardRepository
+from app.services.synonyms import (
+    DEFAULT_SYNONYMS,
+    SYNONYM_PATH,
+    load_synonyms as _load_synonyms,
+)
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = BASE_DIR / "data"
-SYNONYM_PATH = DATA_DIR / "search_synonyms.json"
 _TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣_+#./-]+")
-
-DEFAULT_SYNONYMS: dict[str, list[str]] = {
-    "펌프": ["급수펌프", "순환펌프", "가압펌프", "pump"],
-    "급수": ["상수", "급수배관", "급수펌프"],
-    "배관": ["파이프", "관", "pipe", "배관공사"],
-    "보온": ["단열", "결로방지", "insulation"],
-    "소방": ["스프링클러", "옥내소화전", "소화배관"],
-    "위생": ["오수", "배수", "통기관", "위생기구"],
-    "환기": ["덕트", "송풍기", "배기", "급기"],
-    "수압": ["수압시험", "기밀시험", "압력시험"],
-    "밸브": ["차단밸브", "체크밸브", "감압밸브", "valve"],
-    "동파": ["동결방지", "보온", "열선"],
-}
 
 FIELD_WEIGHTS = {
     "title": 12,
@@ -39,17 +30,8 @@ FIELD_WEIGHTS = {
 
 
 def _ensure_synonyms() -> dict[str, list[str]]:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if not SYNONYM_PATH.exists():
-        SYNONYM_PATH.write_text(json.dumps(DEFAULT_SYNONYMS, ensure_ascii=False, indent=2), encoding="utf-8")
-        return DEFAULT_SYNONYMS
-    try:
-        data = json.loads(SYNONYM_PATH.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            return {str(k): [str(v) for v in vals] for k, vals in data.items() if isinstance(vals, list)}
-    except Exception:
-        pass
-    return DEFAULT_SYNONYMS
+    # 공용 모듈(synonyms.py)에서 로드 — RAG 검색과 동일한 사전 사용
+    return _load_synonyms()
 
 
 def _tokens(text: str) -> list[str]:
