@@ -1,4 +1,7 @@
 import os
+import re
+import time
+from collections import OrderedDict
 
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Header
@@ -18,6 +21,40 @@ gemini = GeminiClient()
 nim = NvidiaNimClient()
 
 
+# ── AI 답변 캐시 (서버측, 전 직원 공유) ────────────────────────────────────────
+# 동일 질문이면 Gemini를 재호출하지 않고 캐시된 답변 텍스트를 재사용한다.
+# 참조 문서(references)는 매번 로컬 검색으로 새로 만들므로 데이터가 바뀌어도 최신 유지.
+# 서버 재시작 시 소멸 — 목적은 비용 절감이지 영속성이 아니다.
+_ANSWER_CACHE: "OrderedDict[str, tuple[float, str, str, str]]" = OrderedDict()
+_ANSWER_CACHE_TTL = 24 * 60 * 60  # 24시간
+_ANSWER_CACHE_MAX = 200
+
+
+def _cache_key(question: str, top_k: int, category: str | None) -> str:
+    norm = re.sub(r"\s+", " ", question.strip().lower())
+    return f"{norm}|k={top_k}|c={(category or '').strip().lower()}"
+
+
+def _cache_get(key: str) -> tuple[str, str, str] | None:
+    """반환: (answer, model, mode) 또는 None. 만료 항목은 제거."""
+    hit = _ANSWER_CACHE.get(key)
+    if not hit:
+        return None
+    ts, answer, model, mode = hit
+    if time.time() - ts > _ANSWER_CACHE_TTL:
+        _ANSWER_CACHE.pop(key, None)
+        return None
+    _ANSWER_CACHE.move_to_end(key)  # LRU 갱신
+    return answer, model, mode
+
+
+def _cache_put(key: str, answer: str, model: str, mode: str) -> None:
+    _ANSWER_CACHE[key] = (time.time(), answer, model, mode)
+    _ANSWER_CACHE.move_to_end(key)
+    while len(_ANSWER_CACHE) > _ANSWER_CACHE_MAX:
+        _ANSWER_CACHE.popitem(last=False)  # 가장 오래된 항목 제거
+
+
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=2, max_length=1000)
     category: str | None = None
@@ -33,6 +70,7 @@ class AskResponse(BaseModel):
     document_references: list[dict] = Field(default_factory=list)
     model: str | None = None
     provider_error: str | None = None
+    cached: bool = False
 
 
 def _reference_payload(items: list[dict]) -> list[dict]:
@@ -248,6 +286,22 @@ async def ask_standard(
             reason=fallback_reason or "외부 AI provider를 사용할 수 없어 로컬 근거 요약 모드로 답변합니다.",
         )
 
+    # 캐시 조회 — 동일 질문이면 AI 재호출 없이 답변 재사용 (참조는 위에서 새로 검색됨)
+    cache_key = _cache_key(question, payload.top_k, payload.category)
+    cached = _cache_get(cache_key)
+    if cached:
+        cached_answer, cached_model, cached_mode = cached
+        return AskResponse(
+            ok=True,
+            mode=cached_mode,
+            question=question,
+            answer=cached_answer,
+            references=references,
+            document_references=document_references,
+            model=cached_model,
+            cached=True,
+        )
+
     system_prompt = (
         "당신은 건축기계설비 현장 시공표준 검색앱의 답변 엔진입니다. "
         "반드시 제공된 회사 표준지침 근거 안에서만 답변하세요. "
@@ -298,6 +352,10 @@ async def ask_standard(
     response_mode = _provider_mode(selected_provider)
     if user_gemini_key and selected_provider == "gemini":
         response_mode = "gemini-user-key"
+
+    # 정상 AI 답변만 캐시에 저장 (fallback/오류 응답은 위에서 이미 return 되어 여기 안 옴)
+    if answer and answer.strip():
+        _cache_put(cache_key, answer, getattr(selected_client, "model", None) or "", response_mode)
 
     return AskResponse(
         ok=True,
