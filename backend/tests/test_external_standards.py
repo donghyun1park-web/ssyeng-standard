@@ -58,13 +58,18 @@ class ExternalStandardsAdapterKcscTest(unittest.TestCase):
             self.assertEqual(item["source"], "kcsc")
             self.assertTrue(item.get("source_url") or item.get("official_url"))
 
-    def test_kcsc_result_source_url_prefers_search_page_over_viewer_url(self) -> None:
+    def test_kcsc_result_source_url_prefers_document_name_search(self) -> None:
+        # KCSC OpenAPI의 코드(순수 숫자 fullCode)는 KCSC 공개 사이트 검색과
+        # 형식이 안 맞아 0건이 나오므로, 문서명(title)을 검색어로 사용한다.
+        from urllib.parse import quote
+
         result = ExternalStandardsAdapter._decorate_kcsc_results(
             [
                 {
                     "id": "KCS-31-20-15",
                     "source": "kcsc",
-                    "code": "KCS 31 20 15",
+                    "code": "2020312015",
+                    "full_code": "2020312015",
                     "title": "기계설비 배관공사",
                     "official_url": "https://www.kcsc.re.kr/StandardCode/Viewer/12345",
                 }
@@ -75,8 +80,8 @@ class ExternalStandardsAdapterKcscTest(unittest.TestCase):
 
         self.assertEqual(len(result), 1)
         self.assertIn("kcsc.re.kr/standardCode/search", result[0]["source_url"])
-        self.assertIn("kcsc_cd=KCS%2031%2020%2015", result[0]["source_url"])
-        self.assertNotIn("searchWrd=", result[0]["source_url"])
+        # 문서명 기반 검색어 (코드가 아닌 title)
+        self.assertIn(f"kcsc_cd={quote('기계설비 배관공사', safe='')}", result[0]["source_url"])
         self.assertNotIn("/Viewer/", result[0]["source_url"])
 
 
