@@ -49,7 +49,6 @@ const TRADE_ICONS_SVG = {
 };
 
 const STORAGE_KEYS = {
-  favorites: 'facility-standard:favorites',
   recent: 'facility-standard:recent',
   checklist: 'facility-standard:checklist-v2',
   settings: 'facility-standard:settings',
@@ -220,12 +219,6 @@ function useStandardItems() {
   };
   useEffect(() => { refreshItems(); }, []);
   return { items, apiStatus, refreshItems };
-}
-
-function toggleFavorite(id, appState) {
-  appState.setFavorites((current) =>
-    current.includes(id) ? current.filter((fid) => fid !== id) : [...current, id]
-  );
 }
 
 // ── Login Page ────────────────────────────────────────────────────────────────
@@ -1321,9 +1314,16 @@ function ChecklistPage({ appState }) {
   const loginSiteName = appState.currentUser?.site_name || '';
   const [siteId, setSiteId] = useSelectedSite(loginSiteName);
 
+  // 현장이 비어 있으면 로그인 현장으로 강제 세팅 (미선택 상태로 default 공용공간에
+  // 데이터가 섞이는 것을 방지)
+  useEffect(() => {
+    if (!siteId && loginSiteName) setSiteId(loginSiteName);
+  }, [siteId, loginSiteName, setSiteId]);
+
   const load = useCallback(() => {
+    if (!siteId) { setLoading(false); return; }
     setLoading(true);
-    const q = siteId ? `?site_id=${encodeURIComponent(siteId)}` : '';
+    const q = `?site_id=${encodeURIComponent(siteId)}`;
     fetchJson(`/api/checklists${q}`).then((data) => {
       setChecklists(data.checklists || []);
     }).catch(() => {
@@ -1355,14 +1355,14 @@ function ChecklistPage({ appState }) {
       </div>
       {appState.currentUser && (
         <p className="info-msg" style={{ margin: '0 0 8px' }}>
-          <strong>{appState.currentUser.name}</strong> · 현장: <strong>{siteId || '미선택'}</strong>
+          <strong>{appState.currentUser.name}</strong> · 현장: <strong>{siteId || '선택 필요'}</strong>
         </p>
       )}
 
       <div className="settings-card">
         <label className="field-label">현장 선택</label>
         <select value={siteId} onChange={(e) => setSiteId(e.target.value)}>
-          <option value="">-- 현장을 선택하세요 --</option>
+          {!siteId && <option value="">-- 현장을 선택하세요 --</option>}
           {sites.map((s) => (
             <option key={s.id} value={s.id}>{s.label}</option>
           ))}
@@ -1370,11 +1370,13 @@ function ChecklistPage({ appState }) {
         <p className="settings-note">같은 현장을 선택한 인원이 체크리스트를 공유합니다.</p>
       </div>
 
-      {loading ? (
+      {!siteId ? (
+        <div className="empty-hint">현장을 먼저 선택하면 공종별 체크리스트가 표시됩니다.</div>
+      ) : loading ? (
         <div className="loading-row"><span className="spinner" />불러오는 중...</div>
       ) : TRADE_LIST.map((trade) => {
         const info = checklists.find((c) => c.trade === trade) || { item_count: 0, checked_count: 0, has_items: false };
-        const target = `/checklist/${encodeURIComponent(trade)}${siteId ? `?site=${encodeURIComponent(siteId)}` : ''}`;
+        const target = `/checklist/${encodeURIComponent(trade)}?site=${encodeURIComponent(siteId)}`;
         return (
           <div className="trade-card" key={trade} onClick={() => navigate(target)}>
             <div className="trade-icon">

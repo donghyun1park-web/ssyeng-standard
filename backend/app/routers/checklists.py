@@ -106,6 +106,15 @@ def _resolve_site(site_id: str | None) -> str:
     return sid or "default"
 
 
+def _require_site(site_id: str | None) -> str:
+    """쓰기 작업 전용 — 현장이 비어 있으면 400. 미선택 상태로 'default' 공용
+    공간에 여러 현장 데이터가 섞이는 것을 차단한다."""
+    sid = (site_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="현장을 먼저 선택해주세요.")
+    return sid
+
+
 def _load_items() -> dict:
     return load_json(ITEMS_PATH, default={"items": []})
 
@@ -212,7 +221,7 @@ def create_item(
     if body.trade not in TRADE_LIST:
         raise HTTPException(status_code=400, detail="유효하지 않은 공종입니다.")
     user_id = _resolve_user(x_user_id)
-    sid = _resolve_site(body.site_id)
+    sid = _require_site(body.site_id)
     data = _load_items()
     items = data.setdefault("items", [])
     existing = _site_items(sid, body.trade)
@@ -299,7 +308,7 @@ def load_template(
     if body.trade not in DEFAULT_TEMPLATES:
         raise HTTPException(status_code=400, detail="템플릿이 없는 공종입니다.")
     user_id = _resolve_user(x_user_id)
-    sid = _resolve_site(body.site_id)
+    sid = _require_site(body.site_id)
     data = _load_items()
     items = data.setdefault("items", [])
     existing = _site_items(sid, body.trade)
@@ -340,7 +349,7 @@ def upsert_check_record(
     if body.trade not in TRADE_LIST:
         raise HTTPException(status_code=400, detail="유효하지 않은 공종입니다.")
     user_id = _resolve_user(x_user_id)
-    sid = _resolve_site(body.site_id)
+    sid = _require_site(body.site_id)
 
     # 현장 공유 모드: 해당 site의 항목인지만 확인 (user_id 무관)
     items = _load_items().get("items", [])
