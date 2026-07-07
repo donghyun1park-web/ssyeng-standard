@@ -1,17 +1,12 @@
 from __future__ import annotations
 
-import json
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
 from app.services.standard_repository import StandardRepository
-from app.services.synonyms import (
-    DEFAULT_SYNONYMS,
-    SYNONYM_PATH,
-    load_synonyms as _load_synonyms,
-)
+from app.services.synonyms import SYNONYM_PATH, load_synonyms as _load_synonyms
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = BASE_DIR / "data"

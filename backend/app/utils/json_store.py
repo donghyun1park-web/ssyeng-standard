@@ -44,7 +44,6 @@ def save_json(path: Path, data: Any, *, indent: int = 2) -> None:
     - filelock으로 동시 쓰기 방지 (같은 파일에 대한 직렬화)
     - 잠금 내부에서 직접 쓰기 (Windows 호환, 원자성 보장)
     """
-    import os
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = FileLock(_lock_path(path), timeout=LOCK_TIMEOUT)
     content = json.dumps(data, ensure_ascii=False, indent=indent)

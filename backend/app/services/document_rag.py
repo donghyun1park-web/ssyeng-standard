@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import re
 import shutil
 import uuid
@@ -105,23 +104,6 @@ def _chunk_text_with_pages(
                 "section": sec,
                 "clause": cla,
             })
-        if end >= len(clean):
-            break
-        start = max(0, end - overlap)
-    return chunks
-
-
-def _chunk_text(text: str, *, chunk_size: int = 900, overlap: int = 120) -> list[str]:
-    clean = re.sub(r"\s+", " ", text or "").strip()
-    if not clean:
-        return []
-    chunks: list[str] = []
-    start = 0
-    while start < len(clean):
-        end = min(start + chunk_size, len(clean))
-        chunk = clean[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
         if end >= len(clean):
             break
         start = max(0, end - overlap)
