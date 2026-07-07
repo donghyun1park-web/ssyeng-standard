@@ -1368,6 +1368,15 @@ function ChecklistPage({ appState }) {
           ))}
         </select>
         <p className="settings-note">같은 현장을 선택한 인원이 체크리스트를 공유합니다.</p>
+        {siteId && (
+          <button
+            className="btn btn-outline"
+            style={{ marginTop: 10 }}
+            onClick={() => window.open(apiUrl(`/api/checklists/export?site_id=${encodeURIComponent(siteId)}`), '_blank')}
+          >
+            엑셀로 내보내기
+          </button>
+        )}
       </div>
 
       {!siteId ? (

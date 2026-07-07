@@ -160,6 +160,12 @@ def list_trades():
     return {"trades": TRADE_LIST}
 
 
+@router.get("/checklists/export")
+def export_checklist(site_id: str = ""):
+    # 정적 경로 — /checklists/{trade} 보다 먼저 등록해야 매칭됨
+    return _export_checklist_xlsx(site_id)
+
+
 @router.get("/checklists")
 def list_checklists(
     site_id: str = "",
@@ -403,3 +409,93 @@ def delete_check_record(
     data["records"] = [r for r in records if r.get("id") != record_id]
     _save_records(data)
     return {"ok": True}
+
+
+def _fmt_dt(iso: str | None) -> str:
+    """ISO 시각 → 'YYYY-MM-DD HH:MM' (표시용)."""
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return str(iso)[:16]
+
+
+def _export_checklist_xlsx(site_id: str = ""):
+    """현장의 5개 공종 체크리스트를 공종별 시트로 묶은 xlsx 파일로 반환."""
+    from io import BytesIO
+
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+    except ImportError:
+        raise HTTPException(status_code=500, detail="openpyxl이 설치되지 않았습니다.")
+
+    from fastapi.responses import StreamingResponse
+
+    sid = _require_site(site_id)
+
+    # 상태별 셀 배경색
+    fills = {
+        "적합": PatternFill("solid", fgColor="E0F0E8"),
+        "부적합": PatternFill("solid", fgColor="FCEAEA"),
+        "해당없음": PatternFill("solid", fgColor="ECEAE2"),
+        "미체크": PatternFill("solid", fgColor="FFFFFF"),
+    }
+    header_fill = PatternFill("solid", fgColor="C96342")
+    header_font = Font(color="FFFFFF", bold=True)
+    headers = ["번호", "점검 항목", "관련 페이지", "상태", "체크자", "체크일시", "메모"]
+
+    wb = Workbook()
+    wb.remove(wb.active)  # 기본 시트 제거
+
+    for trade in TRADE_LIST:
+        ws = wb.create_sheet(title=trade[:31])  # 시트명 31자 제한
+        # 상단 제목행
+        ws.append([f"현장: {sid}", "", "", "", f"출력일: {datetime.now().strftime('%Y-%m-%d %H:%M')}"])
+        ws.append([])
+        # 헤더
+        ws.append(headers)
+        for cell in ws[3]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        items = _site_items(sid, trade)
+        records = {r["item_id"]: r for r in _site_records(sid, trade) if "item_id" in r}
+        for idx, item in enumerate(items, start=1):
+            rec = records.get(item.get("id"), {})
+            status = rec.get("status", "미체크")
+            row = [
+                idx,
+                item.get("text", ""),
+                item.get("related_page", ""),
+                status,
+                rec.get("checked_by", ""),
+                _fmt_dt(rec.get("updated_at")),
+                rec.get("memo", ""),
+            ]
+            ws.append(row)
+            # 상태 셀 색상
+            status_cell = ws.cell(row=ws.max_row, column=4)
+            status_cell.fill = fills.get(status, fills["미체크"])
+            status_cell.alignment = Alignment(horizontal="center")
+            ws.cell(row=ws.max_row, column=2).alignment = Alignment(wrap_text=True, vertical="top")
+
+        # 열 너비
+        widths = [6, 50, 10, 10, 12, 18, 30]
+        for col_idx, w in enumerate(widths, start=1):
+            ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = w
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    from urllib.parse import quote
+    fname = quote(f"체크리스트_{sid}_{datetime.now().strftime('%Y%m%d')}.xlsx")
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{fname}"},
+    )
